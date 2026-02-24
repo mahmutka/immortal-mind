@@ -1,0 +1,15 @@
+{
+  "name": "immortal-mind",
+  "version": "0.1.0",
+  "description": "Blockchain-Persistent AI Identity & Cognitive Architecture",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat run contracts/scripts/deploy.js --network base_sepolia",
+    "deploy:arbitrum": "hardhat run contracts/scripts/deploy.js --network arbitrum_sepolia",
+    "test:contracts": "hardhat test"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.22.0"
+  }
+}
