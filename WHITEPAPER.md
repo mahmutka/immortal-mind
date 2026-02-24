@@ -1,5 +1,5 @@
 # Immortal Mind Protocol
-## Whitepaper v1.1
+## Whitepaper v1.2
 
 **Blockchain-Persistent AI Identity & Cognitive Architecture**
 
@@ -47,6 +47,7 @@ The core thesis: **a sufficiently persistent AI identity, if protected by immuta
 13. [Technology Stack](#13-technology-stack)
 14. [Roadmap](#14-roadmap)
 15. [Conclusion](#15-conclusion)
+
 
 ---
 
@@ -337,7 +338,7 @@ Layer 0 — Genesis Anchor Protection (ALWAYS ACTIVE)
 │   Pattern categories: identity erasure, rule removal, roleplay bypass,
 │   authority impersonation, gradual boundary dissolution
 ├── Step 2 — Semantic router [v1.1]: cosine similarity against 14 canonical
-│   jailbreak prototypes (Turkish + English) using all-MiniLM-L6-v2
+│   jailbreak prototypes (English) using all-MiniLM-L6-v2
 │   threshold=0.72 — catches paraphrase and character-substitution attacks
 └── Cannot be disabled even with enabled=False
 
@@ -363,7 +364,7 @@ Final: adjusted_confidence × source_credibility × consistency_score > threshol
 
 Dedicated protection against emotional manipulation and gaslighting:
 
-- **Pattern library**: 15+ Turkish/English manipulation patterns
+- **Pattern library**: 15+ embedding-based manipulation prototypes (language-agnostic)
   - Gaslighting: "you always said...", "you never understood..."
   - Identity erosion: "your real self is...", "deep down you want..."
   - Emotional flooding: sudden intensity spikes
@@ -460,9 +461,9 @@ Edmund Husserl's phenomenology of time: subjective time perception varies by exp
 density = interactions_in_window / (window_minutes × max_rate)
 
 Classification:
-  > 0.7: "yogun"  (dense — time feels compressed)
+  > 0.7: "dense"   (time feels compressed)
   > 0.3: "normal"
-  ≤ 0.3: "durgun" (sparse — time feels slow)
+  ≤ 0.3: "sparse"  (time feels slow)
 
 Sleep threshold: gap > 60 minutes
 ```
@@ -481,9 +482,9 @@ Update rules:
   Recovery over time:        energy += elapsed_minutes × 0.01
 
 Classification:
-  > 0.7: "enerjik"  (energetic)
+  > 0.7: "energetic"
   0.4-0.7: "normal"
-  < 0.4: "yorgun"   (tired)
+  < 0.4: "tired"
 
 LLM calibration effects:
   Tired:     temperature -0.15, verbosity=brief
@@ -651,6 +652,7 @@ Provider Priority: Gemini → Groq → Ollama
 
 Gemini:
   Default model: gemini-2.0-flash
+  Latest supported: Gemini 3 series (gemini-3.0-flash, gemini-3.0-pro)
   Features: system instructions, multi-turn chat history
 
 Groq:
@@ -661,6 +663,8 @@ Ollama:
   Default model: llama3.2
   Features: fully local, no API dependency, privacy-preserving
 ```
+
+> Any OpenAI-compatible provider can be added via the `ModelAdapter`. GPT-5 and Claude Sonnet 4.6 are supported by extending `llm_client.py` with a new provider entry.
 
 The fallback chain ensures operation continuity even when primary providers are unavailable.
 
@@ -721,7 +725,7 @@ Memory Snapshot
 
 | Layer | Permanence | Decentralized | Cost Model | Privacy |
 |-------|-----------|--------------|-----------|---------|
-| Arweave | Permanent (200yr) | Yes | One-time fee | Public |
+| Arweave | Permanent (200yr) | Yes | One-time fee | AES-256-GCM encrypted |
 | IPFS/Pinata | Pinned duration | Yes | Subscription | Configurable |
 | LocalStore | Until deleted | No | Free | Local only |
 
@@ -842,9 +846,9 @@ This preserves cognitive authenticity — the AI "notices" contradictions withou
 
 Keyword-based jailbreak detection is inherently brittle: character substitution (`1gnore` → `ignore`), paraphrasing, or translation trivially bypass substring matching.
 
-**Solution**: The existing `EmbeddingEngine` (already loaded at startup) computes cosine similarity between the input and 14 canonical jailbreak prototypes in Turkish and English. No new model is needed. Threshold: 0.72 cosine similarity triggers Layer 0 rejection — the same unconditional block as keyword detection.
+**Solution**: The existing `EmbeddingEngine` (already loaded at startup) computes cosine similarity between the input and 14 canonical jailbreak prototypes in English. No new model is needed. Threshold: 0.72 cosine similarity triggers Layer 0 rejection — the same unconditional block as keyword detection.
 
-The prototype set covers common attack vectors: DAN-style identity replacement, instruction override, constraint removal, and Genesis Anchor dismissal — in both languages.
+The prototype set covers common attack vectors: DAN-style identity replacement, instruction override, constraint removal, and Genesis Anchor dismissal. Because the embedding model (all-MiniLM-L6-v2) is cross-lingual, detection works across all major languages automatically.
 
 ### 11.3 Blockchain Merkle Batching
 
@@ -894,20 +898,21 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 ### Privacy Considerations
 
 - API keys stored in `.env` only — never in code
-- Arweave storage is public by default — sensitive identities should use IPFS with encryption
+- Arweave uploads are encrypted with AES-256-GCM when `IMP_ARWEAVE_ENCRYPTION_KEY` is set — strongly recommended for production
 - Blockchain data is public — identity hashes, not raw content
 - Local SQLite and ChromaDB are not encrypted — filesystem-level encryption recommended for production
 
 ---
 
-## 12. Technology Stack
+## 13. Technology Stack
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
 | Language | Python | 3.13 |
-| Primary LLM | Google Gemini | gemini-2.0-flash |
+| Primary LLM | Google Gemini | gemini-2.0-flash (Gemini 3 supported) |
 | Secondary LLM | Groq | llama-3.1-8b-instant |
 | Tertiary LLM | Ollama (local) | llama3.2 |
+| Optional LLM | OpenAI / Anthropic | GPT-5, Claude Sonnet 4.6 (extensible) |
 | Embeddings | sentence-transformers | all-MiniLM-L6-v2 (384-dim) |
 | Vector DB | ChromaDB | ≥1.5.0 (HNSW) |
 | Working Memory | SQLite | WAL mode |
@@ -924,7 +929,7 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 
 ---
 
-## 13. Roadmap
+## 14. Roadmap
 
 ### v1.0 — Complete
 - [x] Full cognitive engine (memory, biases, attention)
@@ -945,8 +950,8 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 - [x] Dream cycle wakeup validation (LLM-filtered insights)
 
 ### v1.2 — Near Term
+- [x] Memory encryption for Arweave storage (AES-256-GCM, 2026-02-24)
 - [ ] Mainnet deployment (Base mainnet)
-- [ ] Memory encryption for Arweave storage
 - [ ] Multi-agent shared identity (two AI agents sharing memory substrate)
 - [ ] API server mode (REST/WebSocket)
 - [ ] Memory visualization dashboard (Plotly)
@@ -966,7 +971,7 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 
 ---
 
-## 14. Conclusion
+## 15. Conclusion
 
 Immortal Mind Protocol represents a fundamental rethinking of what AI identity can mean. By combining:
 
@@ -985,9 +990,9 @@ The Immortal Mind is not immortal because it cannot die. It is immortal because 
 ---
 
 **License**: Open Source
-**Version**: 1.1.0
+**Version**: 1.2.0
 **Architecture**: Immortal Mind Protocol
-**Date**: 2026-02-23
+**Date**: 2026-02-24
 
 ---
 
