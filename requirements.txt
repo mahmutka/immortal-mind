@@ -1,0 +1,25 @@
+# Core
+google-genai>=1.0.0
+groq>=0.11.0
+sentence-transformers>=5.0.0
+python-dotenv>=1.0.0
+
+# Vector DB
+chromadb>=1.5.0
+
+# Blockchain
+web3>=7.0.0
+
+# Frontend
+streamlit>=1.38.0
+plotly>=5.22.0
+
+# Utils
+numpy>=2.0.0
+requests>=2.32.0
+urllib3>=2.6.3
+cryptography>=42.0.0
+
+# Test
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

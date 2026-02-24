@@ -1,0 +1,37 @@
+# Secrets
+.env
+*.env
+arweave-wallet.json
+
+# Runtime data (mount as volume on Lightsail)
+data/
+
+# Dev & test
+tests/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.pyo
+.coverage
+htmlcov/
+
+# Node / Hardhat
+node_modules/
+artifacts/
+cache/
+typechain/
+typechain-types/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Git
+.git/
+.gitignore
+
+# Claude
+.claude/
