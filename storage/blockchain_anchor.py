@@ -176,8 +176,8 @@ class BlockchainAnchor:
                         artifact = json.load(f)
                         abi = artifact.get("abi", artifact)
                     break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not load ABI from %s: %s", path, exc)
 
         if abi is None:
             logger.warning("Contract ABI not found — only hash anchoring is supported")

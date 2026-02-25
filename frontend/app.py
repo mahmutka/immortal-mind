@@ -251,8 +251,8 @@ def render_chat():
                     # Save session data to disk — no loss if tab closes
                     try:
                         engine.save_state()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("save_state failed: %s", exc)
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": response,
