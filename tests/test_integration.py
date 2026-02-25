@@ -30,7 +30,7 @@ class MockLLMClient:
 @pytest.fixture
 def engine():
     """CognitioEngine in a temporary directory."""
-    chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+    pytest.importorskip("chromadb", reason="chromadb not installed")
     tmpdir = tempfile.mkdtemp()
     from cognitio.engine import CognitioEngine
     llm = MockLLMClient()

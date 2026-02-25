@@ -58,7 +58,7 @@ class TestEmotionShield:
         context = []
         # 3 high emotional records
         for _ in range(3):
-            result = self.shield.evaluate(0.85, context, "intense")
+            self.shield.evaluate(0.85, context, "intense")
             context.append({"role": "user", "content": "x", "emotional_tone": 0.8})
 
         # Check whether cooldown was triggered

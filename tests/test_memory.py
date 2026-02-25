@@ -101,9 +101,11 @@ class TestMemoryStore:
         """Delete a record."""
         m = MemoryRecord(content="To be deleted")
         self.store.add(m)
-        assert self.store.delete(m.id) is True
+        deleted = self.store.delete(m.id)
+        assert deleted is True
         assert self.store.get(m.id) is None
-        assert self.store.delete("nonexistent") is False
+        not_deleted = self.store.delete("nonexistent")
+        assert not_deleted is False
 
     def test_get_by_type(self):
         """Filter by type."""

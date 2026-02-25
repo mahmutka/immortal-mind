@@ -12,8 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
 from cognitio.garbage_collector import GarbageCollector
-from cognitio.memory import MemoryRecord, MemoryStore, MemoryType, MemoryValence, MemoryStatus
-from cognitio.vector_store import VectorStore
+from cognitio.memory import MemoryRecord, MemoryStore, MemoryStatus
 
 
 class MockVectorStore:
@@ -62,7 +61,7 @@ class TestGarbageCollector:
         protected.last_accessed = datetime.now(timezone.utc) - timedelta(days=100)
         memory_store.add(protected)
 
-        result = gc.collect()
+        gc.collect()
         assert memory_store.get(protected.id) is not None, "High entrenchment should not be pruned"
         assert protected.id not in vector_store._deleted
 
