@@ -627,7 +627,7 @@ class CognitioEngine:
                         adjusted_confidence,
                         existing.entrenchment,
                     ):
-                        crisis = self.character.trigger_belief_crisis(existing)
+                        self.character.trigger_belief_crisis(existing)
                         self.garbage_collector.register_crisis_memory(existing.id)
                         self.state.belief_crises_experienced += 1
                         logger.warning(f"Belief crisis triggered: {existing.id[:8]}")
@@ -1179,7 +1179,6 @@ class CognitioEngine:
         genesis_count = len(genesis_anchors)
 
         # Clear long-term memory
-        total_before = self.memory_store.count()
         all_ids = list(self.memory_store._store.keys())
         cleared = 0
         for mid in all_ids:

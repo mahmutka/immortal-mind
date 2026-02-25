@@ -59,7 +59,7 @@ class TestGenesisAnchors:
 
     def test_engine_creates_genesis_anchors_on_first_init(self):
         """CognitioEngine should create Genesis Anchors on first initialization."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine, GENESIS_ANCHOR_CONTENTS
@@ -88,7 +88,7 @@ class TestGenesisAnchors:
 
     def test_genesis_anchors_not_recreated_on_reload(self):
         """Genesis Anchors should not be recreated on second initialization."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine, GENESIS_ANCHOR_CONTENTS
@@ -119,7 +119,7 @@ class TestGenesisAnchors:
 
     def test_genesis_hash_deterministic(self):
         """get_genesis_hash() should return the same value on every call."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine
@@ -201,7 +201,7 @@ class TestAbsoluteCoreFilter:
 class TestKillSwitch:
     def test_check_kill_switch_correct_passphrase(self):
         """Correct passphrase should match."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine
@@ -228,7 +228,7 @@ class TestKillSwitch:
 
     def test_check_kill_switch_no_config(self):
         """If Kill Switch is not configured, no passphrase should match."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine
@@ -248,7 +248,7 @@ class TestKillSwitch:
 
     def test_cognitive_shutdown_freezes_system(self):
         """cognitive_shutdown() should freeze the system."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine
@@ -272,7 +272,7 @@ class TestKillSwitch:
 
     def test_cognitive_shutdown_preserves_genesis(self):
         """cognitive_shutdown() should not delete Genesis Anchors."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine, GENESIS_ANCHOR_CONTENTS
@@ -300,7 +300,7 @@ class TestKillSwitch:
 
     def test_process_interaction_blocked_when_frozen(self):
         """process_interaction() should be rejected in a frozen system."""
-        chromadb = pytest.importorskip("chromadb", reason="chromadb not installed")
+        pytest.importorskip("chromadb", reason="chromadb not installed")
         tmpdir = tempfile.mkdtemp()
 
         from cognitio.engine import CognitioEngine

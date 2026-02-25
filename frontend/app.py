@@ -286,7 +286,7 @@ def render_blockchain():
             else:
                 try:
                     from storage.blockchain_anchor import BlockchainAnchor
-                    anchor = BlockchainAnchor()
+                    BlockchainAnchor()
                     st.json({"identity_id": identity_id, "status": "simulated"})
                 except Exception as e:
                     st.error(f"Blockchain connection error: {e}")
