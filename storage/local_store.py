@@ -10,8 +10,11 @@ Continues to work even without an internet connection.
 import json
 import logging
 import os
+import re as _re
 from datetime import datetime, timezone
 from typing import Optional
+
+_SAFE_ID_RE = _re.compile(r"[^a-zA-Z0-9_\-]")
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,8 @@ class LocalStore:
         import hashlib
 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"{identity_id[:16]}_{timestamp}.json"
+        safe_id = _SAFE_ID_RE.sub("_", identity_id[:16])
+        filename = f"{safe_id}_{timestamp}.json"
         filepath = os.path.join(self.base_dir, filename)
 
         content = json.dumps(snapshot, ensure_ascii=False, indent=2)
@@ -54,6 +58,10 @@ class LocalStore:
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
+        try:
+            os.chmod(filepath, 0o600)
+        except NotImplementedError:
+            pass  # Windows — ACLs handle permissions
 
         uri = f"local://{filepath}"
         logger.info(f"Snapshot saved: {filepath}")
@@ -76,6 +84,13 @@ class LocalStore:
             dict: Snapshot data or None
         """
         filepath = uri.replace("local://", "")
+
+        # Prevent path traversal: resolve and confirm within base_dir
+        safe_base = os.path.realpath(self.base_dir)
+        safe_path = os.path.realpath(filepath)
+        if not safe_path.startswith(safe_base + os.sep):
+            logger.warning("Path traversal attempt blocked: %s", filepath)
+            return None
 
         if not os.path.exists(filepath):
             logger.warning(f"Snapshot not found: {filepath}")

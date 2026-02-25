@@ -28,6 +28,7 @@ import logging
 import os
 import re
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -35,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 # Arweave TX ID: 43-character base64url string
 _ARWEAVE_TX_RE = re.compile(r"^[a-zA-Z0-9_-]{43}$")
+# Trusted Arweave gateway hostnames
+_TRUSTED_GATEWAYS = frozenset({"arweave.net", "ar-io.net", "g8way.io", "arweave.dev"})
 # Required fields of an Arweave JWK RSA wallet
 _JWK_REQUIRED_FIELDS = {"kty", "n", "e"}
 # Memory types that must never be uploaded unencrypted
@@ -169,6 +172,10 @@ class ArweaveStore:
         wallet_path: Optional[str] = None,
         gateway: str = "https://arweave.net",
     ) -> None:
+        parsed_gw = urlparse(gateway)
+        if parsed_gw.hostname not in _TRUSTED_GATEWAYS:
+            logger.warning("Untrusted Arweave gateway rejected: %s — using default.", gateway)
+            gateway = "https://arweave.net"
         self.gateway = gateway.rstrip("/")
         self.wallet_path = wallet_path or os.getenv("ARWEAVE_WALLET_PATH")
         self._wallet = None
