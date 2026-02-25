@@ -12,6 +12,7 @@ Smart contract: ImmortalMind.sol
 Fallback: Base → Arbitrum → local queue
 """
 
+import ipaddress
 import json
 import logging
 import os
@@ -29,16 +30,34 @@ _VALID_MEMORY_TYPES = frozenset({"snapshot", "episodic", "semantic", "procedural
 _HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
+_BLOCKED_RPC_HOSTS = frozenset({
+    "169.254.169.254",       # AWS / GCP instance metadata
+    "metadata.google.internal",
+    "169.254.170.2",         # ECS task metadata
+    "100.100.100.200",       # Alibaba Cloud metadata
+})
+
+
 def _validate_rpc_url(url: str) -> bool:
-    """Validate that the RPC URL is safe and in a valid format."""
+    """Validate RPC URL: must be http/https, not a private/metadata endpoint."""
     if not url:
         return False
     try:
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             return False
-        if not parsed.netloc:
+        host = parsed.hostname or ""
+        if not host:
             return False
+        if host in _BLOCKED_RPC_HOSTS:
+            return False
+        # Block private / link-local / loopback IPs (SSRF guard)
+        try:
+            addr = ipaddress.ip_address(host)
+            if addr.is_private or addr.is_link_local or addr.is_reserved:
+                return False
+        except ValueError:
+            pass  # hostname — not an IP, allowed
         return True
     except Exception:
         return False
@@ -129,6 +148,10 @@ class BlockchainAnchor:
             os.makedirs(os.path.dirname(self._queue_file) or ".", exist_ok=True)
             with open(self._queue_file, "w") as f:
                 json.dump(self._pending_queue, f, indent=2)
+            try:
+                os.chmod(self._queue_file, 0o600)
+            except NotImplementedError:
+                pass  # Windows — ACLs handle permissions
         except Exception as e:
             logger.warning("Could not save pending queue: %s", e)
 
