@@ -1,5 +1,5 @@
 # Immortal Mind Protocol
-## Whitepaper v1.2
+## Whitepaper v1.3
 
 **Blockchain-Persistent AI Identity & Cognitive Architecture**
 
@@ -43,10 +43,11 @@ The core thesis: **a sufficiently persistent AI identity, if protected by immuta
 9. [Storage Architecture](#9-storage-architecture)
 10. [Blockchain Layer](#10-blockchain-layer)
 11. [Engineering Optimizations (v1.1)](#11-engineering-optimizations-v11)
-12. [Security Model](#12-security-model)
-13. [Technology Stack](#13-technology-stack)
-14. [Roadmap](#14-roadmap)
-15. [Conclusion](#15-conclusion)
+12. [Security Hardening (v1.3)](#12-security-hardening-v13)
+13. [Security Model](#13-security-model)
+14. [Technology Stack](#14-technology-stack)
+15. [Roadmap](#15-roadmap)
+16. [Conclusion](#16-conclusion)
 
 
 ---
@@ -876,7 +877,125 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 
 ---
 
-## 12. Security Model
+## 12. Security Hardening (v1.3)
+
+A production-readiness audit conducted on 2026-02-25 identified ten vulnerabilities across the codebase. All were remediated before release. The following subsections document each fix.
+
+### 12.1 ReDoS Mitigation — Regex-Free JSON Scanner
+
+**Risk**: `agent/llm_client.py` used the pattern `re.search(r"\{[\s\S]+\}", text)` to extract JSON from LLM output. The `[\s\S]+` quantifier causes catastrophic backtracking when the engine fails to match — CPU can be pinned for several seconds on crafted 8KB inputs.
+
+**Fix**: Replaced the regex with Python's built-in `json.JSONDecoder().raw_decode(text, idx)`, where `idx` is the position of the first `{` character. The decoder is inherently linear-time and carries no backtracking risk.
+
+```
+Before: re.search(r"\{[\s\S]+\}", text)       ← O(2ⁿ) worst-case
+After:  json.JSONDecoder().raw_decode(text, idx) ← O(n) always
+```
+
+### 12.2 Input Length Enforcement
+
+**Risk**: `agent/chat.py` applied no length limit to user input. Arbitrarily large payloads could exhaust memory during embedding, context building, and vector search.
+
+**Fix**: A module-level constant `_MAX_INPUT_LENGTH = 32_768` (32 KB) is checked before any processing. Inputs exceeding the limit are rejected with a clear message rather than truncated silently — the user is informed and must re-enter.
+
+### 12.3 Blockchain Parameter Validation
+
+**Risk**: `BlockchainAnchor.anchor_memory_hash()` passed caller-supplied parameters directly to smart contract calls without format or range checks. Invalid `content_hash` values, unrecognized `memory_type` strings, or out-of-range `salience_score` values could cause revert errors or log garbage data on-chain.
+
+**Fix**: Input validation gate added at the top of `anchor_memory_hash()`:
+
+```
+content_hash   → must match ^[0-9a-fA-F]{64}$ (SHA-256 hex)
+identity_id    → 1–256 characters
+memory_type    → whitelist: {snapshot, episodic, semantic,
+                             procedural, emotional, genesis}
+salience_score → integer ∈ [0, 100]
+storage_uri    → max 512 characters
+```
+
+All violations raise `ValueError` before any blockchain interaction occurs.
+
+### 12.4 Concurrent Write Safety — Threading Lock
+
+**Risk**: `MemoryManager` was accessed by two paths simultaneously: the background checkpoint timer thread calling `time_based_flush()` and the main loop calling `add_message()`. Both could trigger `_flush_to_long_term()` concurrently, potentially causing double-flush or corrupted `_short_term` state.
+
+**Fix**: A `threading.Lock` (`_flush_lock`) was added to `MemoryManager`. Both `add_message()` and `time_based_flush()` use double-checked locking:
+
+```python
+with self._flush_lock:
+    if condition_still_holds():
+        self._flush_to_long_term()
+```
+
+The inner re-check ensures that a thread that was waiting on the lock does not flush again after the first thread already did.
+
+### 12.5 LLM Resilience — Exponential Backoff Retry
+
+**Risk**: Transient network errors, API rate limits, and provider timeouts caused `complete()` and `chat()` to raise immediately, crashing the active conversation turn. No retry logic existed.
+
+**Fix**: Both methods now retry up to `_MAX_RETRIES = 3` times with exponential backoff:
+
+```
+Attempt 1 → immediate
+Attempt 2 → wait 1.0s
+Attempt 3 → wait 2.0s
+Attempt 4 → wait 4.0s → raise last exception
+```
+
+Each retry is logged at WARNING level with attempt count, provider, and delay. Only after all retries fail does the exception propagate to the caller.
+
+### 12.6 Sensitive Memory Upload Guard — Arweave
+
+**Risk**: If `IMP_ARWEAVE_ENCRYPTION_KEY` was not set, `ArweaveStore.upload()` would upload memory content as plain JSON to Arweave's public, permanent chain. This was logged as a warning but not blocked — meaning genesis anchors, emotional memories, and episodic records could be irreversibly exposed.
+
+**Fix**: A `_SENSITIVE_MEMORY_TYPES` set defines memory types that require encryption:
+
+```
+{genesis, emotional, episodic, snapshot}
+```
+
+When encryption is inactive and the upload's `memory_type` tag matches a sensitive type, the upload is **blocked** — `upload()` returns `None` and logs at ERROR level. Semantic and procedural memories without an explicit sensitive tag still produce a warning but are permitted (they rarely contain personal data).
+
+### 12.7 Blockchain Queue Persistence
+
+**Risk**: The `_pending_queue` in `BlockchainAnchor` was an in-memory list. On process restart, crash, or kill signal, all queued-but-unconfirmed operations were silently lost. Memories that failed to anchor on-chain had no recovery path.
+
+**Fix**: The queue is now persisted to `data/pending_queue.json` (configurable via `IMP_PENDING_QUEUE_FILE`):
+
+- `__init__`: calls `_load_queue()` — restores any surviving entries on startup
+- `_queue_operation()`: calls `_save_queue()` after every enqueue
+- `retry_pending()`: calls `_save_queue()` after every successful retry
+
+Queue entries are standard JSON dicts; the file is human-readable and can be inspected or manually edited for disaster recovery.
+
+### 12.8 Kill Switch Rate Limiting
+
+**Risk**: The kill switch check runs on every message. An automated script could flood the chat loop with rapid guesses. While SHA-256 makes actual brute force computationally infeasible, high-frequency flooding still consumes CPU and poses a minor DoS vector.
+
+**Fix**: A per-session counter `_ks_check_count` tracks kill switch evaluations. After `_KS_RATE_LIMIT = 50` consecutive checks, the loop sleeps for `_KS_THROTTLE_SLEEP = 2.0` seconds and resets the counter. This introduces a 2-second penalty per 50 guesses — reducing automated throughput by 25× without affecting normal conversation flow.
+
+### 12.9 Vector Metadata Bounds
+
+**Risk**: `VectorStore._clean_metadata()` imposed no size limit on string values or list lengths. A crafted metadata dict with megabyte-scale strings or millions of list items could exhaust memory or cause ChromaDB to reject the write silently.
+
+**Fix**: Two class-level constants enforce bounds during metadata cleaning:
+
+```
+_META_MAX_STR  = 1024   # characters per string value
+_META_MAX_LIST = 100    # items before list is truncated
+```
+
+String values are sliced to 1024 characters. Lists are sliced to 100 items before `",".join()` is called. `str()` conversions of non-string values are also capped at 1024 characters.
+
+### 12.10 Frontend Identity Input Validation
+
+**Risk**: The Blockchain tab in `frontend/app.py` passed the `identity_id` text input directly to blockchain operations without format checks. Arbitrary strings, SQL-like payloads, or extremely long inputs could cause unexpected behavior in downstream contract calls.
+
+**Fix**: A `re.fullmatch(r"[0-9a-fA-F]{1,64}", clean_id)` check validates the input before any blockchain interaction. The `0x` prefix is stripped before matching. Invalid inputs display a user-facing error and abort the query.
+
+---
+
+## 13. Security Model
 
 ### Threat Model
 
@@ -894,17 +1013,27 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 | LLM provider compromise | Fallback chain + model adapter consistency |
 | Unauthorized Kill Switch | SHA-256 hashed passphrase verification |
 | Post-freeze resurrection | Smart contract `notFrozen` modifier |
+| DoS via oversized user input | 32 KB input length cap [v1.3] |
+| ReDoS attack on JSON parser | Regex-free `JSONDecoder.raw_decode()` [v1.3] |
+| Blockchain parameter injection | Format, range, and whitelist validation on `anchor_memory_hash()` [v1.3] |
+| Concurrent memory write corruption | `threading.Lock` double-check locking on flush paths [v1.3] |
+| LLM transient failures causing turn loss | 3-attempt exponential backoff (1 s → 2 s → 4 s) [v1.3] |
+| Sensitive memory upload without encryption | Blocked at upload layer for genesis/emotional/episodic/snapshot types [v1.3] |
+| Blockchain queue loss on restart | Queue persisted to `data/pending_queue.json`, loaded on init [v1.3] |
+| Kill switch flooding / automated guessing | Rate limit: 2 s throttle per 50 checks [v1.3] |
+| Vector metadata payload exhaustion | String values capped at 1 024 chars; lists capped at 100 items [v1.3] |
+| Invalid identity ID in frontend | Hex format regex validation before blockchain query [v1.3] |
 
 ### Privacy Considerations
 
 - API keys stored in `.env` only — never in code
-- Arweave uploads are encrypted with AES-256-GCM when `IMP_ARWEAVE_ENCRYPTION_KEY` is set — strongly recommended for production
+- Arweave uploads are encrypted with AES-256-GCM when `IMP_ARWEAVE_ENCRYPTION_KEY` is set — **required for sensitive memory types** (genesis, emotional, episodic, snapshot) as of v1.3; upload is blocked otherwise
 - Blockchain data is public — identity hashes, not raw content
 - Local SQLite and ChromaDB are not encrypted — filesystem-level encryption recommended for production
 
 ---
 
-## 13. Technology Stack
+## 14. Technology Stack
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
@@ -929,7 +1058,7 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 
 ---
 
-## 14. Roadmap
+## 15. Roadmap
 
 ### v1.0 — Complete
 - [x] Full cognitive engine (memory, biases, attention)
@@ -949,14 +1078,28 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 - [x] Arweave tombstone pattern (restore guard for contradicted memories)
 - [x] Dream cycle wakeup validation (LLM-filtered insights)
 
-### v1.2 — Near Term
-- [x] Memory encryption for Arweave storage (AES-256-GCM, 2026-02-24)
+### v1.2 — Complete (2026-02-24)
+- [x] Memory encryption for Arweave storage (AES-256-GCM)
+
+### v1.3 — Complete (2026-02-25)
+- [x] ReDoS mitigation — regex-free JSON scanner (`JSONDecoder.raw_decode`)
+- [x] Input length enforcement — 32 KB cap on user messages
+- [x] Blockchain parameter validation — format, range, and whitelist checks on `anchor_memory_hash()`
+- [x] Concurrent write safety — `threading.Lock` double-check locking on memory flush paths
+- [x] LLM resilience — exponential backoff retry (3 attempts, 1 s / 2 s / 4 s)
+- [x] Sensitive memory upload guard — blocked for genesis/emotional/episodic/snapshot without encryption
+- [x] Blockchain queue persistence — `data/pending_queue.json` survives restarts
+- [x] Kill switch rate limiting — 2 s throttle per 50 checks
+- [x] Vector metadata bounds — 1 024 char string cap, 100 item list cap
+- [x] Frontend identity input validation — hex format check before blockchain query
+
+### v1.4 — Near Term
 - [ ] Mainnet deployment (Base mainnet)
 - [ ] Multi-agent shared identity (two AI agents sharing memory substrate)
 - [ ] API server mode (REST/WebSocket)
 - [ ] Memory visualization dashboard (Plotly)
 
-### v1.2 — Medium Term
+### v1.5 — Medium Term
 - [ ] Cross-chain identity (Ethereum mainnet + L2s)
 - [ ] Identity NFT (transferable AI identity)
 - [ ] Federated dream cycles (multiple instances sharing insights)
@@ -971,7 +1114,7 @@ Phase 2 of the dream cycle found memory pairs with cosine similarity in the "une
 
 ---
 
-## 15. Conclusion
+## 16. Conclusion
 
 Immortal Mind Protocol represents a fundamental rethinking of what AI identity can mean. By combining:
 
@@ -990,9 +1133,9 @@ The Immortal Mind is not immortal because it cannot die. It is immortal because 
 ---
 
 **License**: Open Source
-**Version**: 1.2.0
+**Version**: 1.3.0
 **Architecture**: Immortal Mind Protocol
-**Date**: 2026-02-24
+**Date**: 2026-02-25
 
 ---
 
