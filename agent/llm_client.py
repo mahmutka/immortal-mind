@@ -193,8 +193,8 @@ class LLMClient:
             data = json.loads(text.strip())
             if isinstance(data, dict):
                 return _fill_defaults(data)
-        except json.JSONDecodeError:
-            pass
+        except json.JSONDecodeError as exc:
+            logger.debug("JSON direct parse failed: %s", exc)
 
         # 2. Markdown code block
         match = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
@@ -203,8 +203,8 @@ class LLMClient:
                 data = json.loads(match.group(1))
                 if isinstance(data, dict):
                     return _fill_defaults(data)
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as exc:
+                logger.debug("JSON markdown block parse failed: %s", exc)
 
         # 3. First { ... } block — regex-free JSON scan (no ReDoS risk)
         if len(text) <= 8192:
@@ -214,8 +214,8 @@ class LLMClient:
                     data, _ = json.JSONDecoder().raw_decode(text, idx)
                     if isinstance(data, dict):
                         return _fill_defaults(data)
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as exc:
+                    logger.debug("JSON raw_decode failed: %s", exc)
 
         logger.warning("JSON parse failed. Raw output (first 120 chars): %s", text[:120])
         return {k: None for k in (expected_keys or [])}
