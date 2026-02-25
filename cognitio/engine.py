@@ -35,7 +35,6 @@ import logging
 import os
 import queue
 import threading
-import uuid
 from datetime import datetime, timezone
 
 # Kill switch passphrase hashing — PBKDF2-HMAC-SHA256 (CodeQL py/weak-sensitive-data-hashing)
@@ -516,7 +515,6 @@ class CognitioEngine:
         tags_raw = pending.get("tags", [])
         if isinstance(tags_raw, str):
             try:
-                import json
                 tags = json.loads(tags_raw)
             except Exception:
                 tags = []

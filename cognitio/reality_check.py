@@ -20,7 +20,6 @@ import math
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from cognitio.memory import MemoryRecord
     from cognitio.vector_store import VectorStore
     from cognitio.memory import MemoryStore
 

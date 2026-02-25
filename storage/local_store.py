@@ -10,7 +10,6 @@ Continues to work even without an internet connection.
 import json
 import logging
 import os
-import shutil
 from datetime import datetime, timezone
 from typing import Optional
 

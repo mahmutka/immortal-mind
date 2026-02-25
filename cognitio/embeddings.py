@@ -10,7 +10,6 @@ Model: all-MiniLM-L6-v2 (lightweight, fast, 384-dimensional)
 """
 
 import logging
-from typing import Optional
 
 import numpy as np
 

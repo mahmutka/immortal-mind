@@ -435,10 +435,8 @@ def main() -> None:
     # Suppress unnecessary HuggingFace and sentence-transformers warnings
     import warnings
     warnings.filterwarnings("ignore")
-    import os
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    import logging
     logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
     logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
     args = _parse_args()
