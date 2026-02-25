@@ -30,10 +30,7 @@ def wm():
     del wm_instance
     gc.collect()
     import shutil
-    try:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-    except Exception:
-        pass
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 class TestWorkingMemory:

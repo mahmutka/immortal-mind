@@ -4,13 +4,11 @@ tests/test_biases.py
 Tests for the six cognitive bias engines.
 """
 
-import math
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pytest
 from cognitio.biases import AvailabilityBias, ConfirmationBias, NegativityBias, HaloEffect, AnchoringBias, BiasEngine
 from cognitio.memory import MemoryRecord, MemoryType, MemoryValence
 
