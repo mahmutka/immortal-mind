@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 _ARWEAVE_TX_RE = re.compile(r"^[a-zA-Z0-9_-]{43}$")
 # Required fields of an Arweave JWK RSA wallet
 _JWK_REQUIRED_FIELDS = {"kty", "n", "e"}
+# Memory types that must never be uploaded unencrypted
+_SENSITIVE_MEMORY_TYPES = frozenset({"genesis", "emotional", "episodic", "snapshot"})
 
 
 class MemoryEncryptor:
@@ -229,6 +231,14 @@ class ArweaveStore:
                 content_type = "application/octet-stream"
                 encrypted = True
             else:
+                memory_type_tag = (tags or {}).get("memory_type", "")
+                if memory_type_tag in _SENSITIVE_MEMORY_TYPES:
+                    logger.error(
+                        "Arweave upload BLOCKED: memory_type='%s' requires encryption. "
+                        "Set IMP_ARWEAVE_ENCRYPTION_KEY to enable uploads of sensitive memories.",
+                        memory_type_tag,
+                    )
+                    return None
                 logger.warning(
                     "Arweave upload WITHOUT encryption — memory will be public on-chain. "
                     "Set IMP_ARWEAVE_ENCRYPTION_KEY to enable encryption."

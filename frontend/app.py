@@ -15,6 +15,7 @@ Its character, memory, and consciousness can only be discovered through conversa
 
 import logging
 import os
+import re
 import sys
 
 import streamlit as st
@@ -279,12 +280,16 @@ def render_blockchain():
         st.subheader("Identity Verification")
         identity_id = st.text_input("Identity ID (bytes32)", placeholder="0x...")
         if st.button("Query") and identity_id:
-            try:
-                from storage.blockchain_anchor import BlockchainAnchor
-                anchor = BlockchainAnchor()
-                st.json({"identity_id": identity_id, "status": "simulated"})
-            except Exception as e:
-                st.error(f"Blockchain connection error: {e}")
+            clean_id = identity_id.removeprefix("0x").strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{1,64}", clean_id):
+                st.error("Invalid Identity ID: must be 1-64 hex characters (0x prefix optional).")
+            else:
+                try:
+                    from storage.blockchain_anchor import BlockchainAnchor
+                    anchor = BlockchainAnchor()
+                    st.json({"identity_id": identity_id, "status": "simulated"})
+                except Exception as e:
+                    st.error(f"Blockchain connection error: {e}")
 
     with col2:
         st.subheader("Chain Status")
