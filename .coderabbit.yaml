@@ -1,0 +1,50 @@
+# CodeRabbit configuration for Immortal Mind Protocol
+# https://docs.coderabbit.ai/configure-coderabbit
+
+language: "en-US"
+
+reviews:
+  profile: "assertive"          # Thorough, finds more issues
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  path_filters:
+    - "!data/**"
+    - "!node_modules/**"
+    - "!.pytest_cache/**"
+    - "!**/__pycache__/**"
+    - "!contracts/artifacts/**"
+
+  path_instructions:
+    - path: "cognitio/**"
+      instructions: |
+        Focus on: memory safety, thread safety, data integrity, cognitive bias
+        correctness, and Genesis Anchor immutability guarantees.
+    - path: "agent/**"
+      instructions: |
+        Focus on: input validation, LLM prompt injection risks, API key
+        handling, retry logic correctness, and memory manager thread safety.
+    - path: "storage/**"
+      instructions: |
+        Focus on: encryption correctness, blockchain parameter validation,
+        queue persistence reliability, and Arweave upload security.
+    - path: "frontend/**"
+      instructions: |
+        Focus on: input sanitization, Streamlit-specific XSS risks, and
+        user-supplied data passed to backend systems.
+    - path: "contracts/**"
+      instructions: |
+        Focus on: reentrancy, access control, integer overflow, and
+        event emission completeness.
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "main"
+
+chat:
+  auto_reply: true
