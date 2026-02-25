@@ -106,7 +106,11 @@ class RealityCheck:
         if embedder is not None:
             self._init_jailbreak_embeddings()
 
-        logger.info(f"RealityCheck initialized: enabled={enabled}, semantic_guard={'active' if embedder else 'inactive'}")
+        logger.info(
+            "RealityCheck initialized: enabled=%s, semantic_guard=%s",
+            enabled,
+            "active" if embedder else "inactive",
+        )
 
     def _init_jailbreak_embeddings(self) -> None:
         """Pre-compute embedding vectors for jailbreak prototypes."""

@@ -54,9 +54,8 @@ class WorkingMemory:
         self._initialize_db()
 
         logger.info(
-            f"WorkingMemory initialized: db={db_path}, "
-            f"session={self._session_id[:8]}, "
-            f"checkpoint_every={checkpoint_every_n}msg"
+            "WorkingMemory initialized: checkpoint_every=%dmsg",
+            checkpoint_every_n,
         )
 
     def _get_connection(self) -> sqlite3.Connection:

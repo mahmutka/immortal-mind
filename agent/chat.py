@@ -34,6 +34,20 @@ _MAX_INPUT_LENGTH = 32_768  # 32KB — prevent memory/DoS via oversized inputs
 _KS_RATE_LIMIT = 50        # max kill switch checks before throttle kicks in
 _KS_THROTTLE_SLEEP = 2.0   # seconds to sleep when rate limit is hit
 
+# PBKDF2-HMAC-SHA256 for kill switch passphrase — must match cognitio/engine.py constants
+_KS_PBKDF2_SALT = b"IMP-kill-switch-salt-v1"
+_KS_PBKDF2_ITER = 100_000
+
+
+def _hash_kill_switch(passphrase: str) -> str:
+    """Derive a secure hash from a kill switch passphrase using PBKDF2-HMAC-SHA256."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        passphrase.encode("utf-8"),
+        _KS_PBKDF2_SALT,
+        _KS_PBKDF2_ITER,
+    ).hex()
+
 _BANNER = r"""
   ___                           _        _   __  __ _           _
  |_ _|_ __ ___  _ __ ___   ___ _ __| |_ __ _| | |  \/  (_)_ __   __| |
@@ -271,16 +285,16 @@ def _load_kill_switch_hash() -> Optional[str]:
 
     env_plain = os.getenv("IMP_KILL_SWITCH")
     if env_plain:
-        return hashlib.sha256(env_plain.encode("utf-8")).hexdigest()
+        return _hash_kill_switch(env_plain)
 
     return None
 
 
 def _is_kill_switch(text: str, kill_switch_hash: Optional[str]) -> bool:
-    """Kill Switch passphrase match check (constant-time)."""
+    """Kill Switch passphrase match check (constant-time PBKDF2 comparison)."""
     if kill_switch_hash is None:
         return False
-    candidate = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    candidate = _hash_kill_switch(text)
     return hmac.compare_digest(candidate, kill_switch_hash)
 
 

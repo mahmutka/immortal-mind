@@ -37,6 +37,20 @@ import queue
 import threading
 import uuid
 from datetime import datetime, timezone
+
+# Kill switch passphrase hashing — PBKDF2-HMAC-SHA256 (CodeQL py/weak-sensitive-data-hashing)
+_KS_PBKDF2_SALT = b"IMP-kill-switch-salt-v1"
+_KS_PBKDF2_ITER = 100_000
+
+
+def _hash_kill_switch(passphrase: str) -> str:
+    """Derive a secure hash from a kill switch passphrase using PBKDF2-HMAC-SHA256."""
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        passphrase.encode("utf-8"),
+        _KS_PBKDF2_SALT,
+        _KS_PBKDF2_ITER,
+    ).hex()
 from typing import Optional
 
 from cognitio.memory import MemoryRecord, MemoryStore, MemoryType, MemoryValence, MemoryStatus
@@ -893,7 +907,7 @@ class CognitioEngine:
     def _load_state(self, filepath: str) -> None:
         """Load memory state from JSON."""
         if not os.path.exists(filepath):
-            logger.info(f"State file not found, starting fresh: {filepath}")
+            logger.info("State file not found, starting fresh.")
             return
 
         try:
@@ -1110,11 +1124,11 @@ class CognitioEngine:
 
         env_plain = os.getenv("IMP_KILL_SWITCH")
         if env_plain:
-            return hashlib.sha256(env_plain.encode("utf-8")).hexdigest()
+            return _hash_kill_switch(env_plain)
 
         cfg_plain = self.config.get("kill_switch_passphrase")
         if cfg_plain:
-            return hashlib.sha256(cfg_plain.encode("utf-8")).hexdigest()
+            return _hash_kill_switch(cfg_plain)
 
         return None
 
@@ -1133,7 +1147,7 @@ class CognitioEngine:
         if self._kill_switch_hash is None:
             return False
 
-        candidate_hash = hashlib.sha256(passphrase.encode("utf-8")).hexdigest()
+        candidate_hash = _hash_kill_switch(passphrase)
         return hmac.compare_digest(candidate_hash, self._kill_switch_hash)
 
     def cognitive_shutdown(self) -> dict:
