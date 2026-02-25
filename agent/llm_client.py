@@ -97,7 +97,7 @@ class LLMClient:
                                self.provider, attempt + 1, self._MAX_RETRIES, delay, e)
                 time.sleep(delay)
         logger.error("LLM complete failed after %d attempts (%s): %s", self._MAX_RETRIES, self.provider, last_exc)
-        raise last_exc
+        raise last_exc or RuntimeError(f"LLM complete failed after {self._MAX_RETRIES} attempts ({self.provider})")
 
     def chat(self, messages: list[dict], system_prompt: Optional[str] = None, max_tokens: int = 1024, temperature: float = 0.7) -> str:
         """Multi-turn chat completion with exponential backoff retry."""
@@ -117,7 +117,7 @@ class LLMClient:
                                self.provider, attempt + 1, self._MAX_RETRIES, delay, e)
                 time.sleep(delay)
         logger.error("LLM chat failed after %d attempts (%s): %s", self._MAX_RETRIES, self.provider, last_exc)
-        raise last_exc
+        raise last_exc or RuntimeError(f"LLM chat failed after {self._MAX_RETRIES} attempts ({self.provider})")
 
     def health_check(self) -> bool:
         """Check whether the provider is accessible."""
