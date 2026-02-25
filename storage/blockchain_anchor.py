@@ -98,7 +98,8 @@ class BlockchainAnchor:
 
         self._web3 = None
         self._contract = None
-        self._pending_queue: list[dict] = []
+        self._queue_file = os.getenv("IMP_PENDING_QUEUE_FILE", "data/pending_queue.json")
+        self._pending_queue: list[dict] = self._load_queue()
 
         # Merkle batch system (100 memories = 1 TX)
         self._batcher = MerkleBatcher(batch_size=100)
@@ -108,6 +109,28 @@ class BlockchainAnchor:
             f"BlockchainAnchor initialized: chain={chain_name}, "
             f"rpc={self.rpc_url[:30]}..."
         )
+
+    def _load_queue(self) -> list[dict]:
+        """Load pending queue from disk (survives restarts)."""
+        if os.path.exists(self._queue_file):
+            try:
+                with open(self._queue_file) as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    logger.info("Loaded %d pending operations from queue file.", len(data))
+                    return data
+            except Exception as e:
+                logger.warning("Could not load pending queue from %s: %s", self._queue_file, e)
+        return []
+
+    def _save_queue(self) -> None:
+        """Persist pending queue to disk."""
+        try:
+            os.makedirs(os.path.dirname(self._queue_file) or ".", exist_ok=True)
+            with open(self._queue_file, "w") as f:
+                json.dump(self._pending_queue, f, indent=2)
+        except Exception as e:
+            logger.warning("Could not save pending queue: %s", e)
 
     def _init_web3(self) -> bool:
         """Initialize Web3 and contract connection."""
@@ -275,6 +298,7 @@ class BlockchainAnchor:
         """Add a failed operation to the queue."""
         entry = {**data, "queued_at": datetime.now(timezone.utc).isoformat()}
         self._pending_queue.append(entry)
+        self._save_queue()
         logger.warning(f"Operation queued: {data.get('type', 'unknown')}")
         return {"queued": True, "queue_size": len(self._pending_queue)}
 
@@ -308,6 +332,7 @@ class BlockchainAnchor:
             remaining.append(operation)
 
         self._pending_queue = remaining
+        self._save_queue()
         logger.info(f"retry_pending: {processed} processed, {len(remaining)} remaining")
         return processed
 

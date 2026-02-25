@@ -234,20 +234,28 @@ class VectorStore:
         except Exception as e:
             logger.error("VectorStore clear error: %s", e)
 
+    _META_MAX_STR = 1024   # max chars for a single string metadata value
+    _META_MAX_LIST = 100   # max items in a list before truncation
+
     @staticmethod
     def _clean_metadata(metadata: dict) -> dict:
         """
         Clean metadata for ChromaDB.
         Only string, int, float, and bool values are allowed.
+        String values are capped at 1024 chars; lists at 100 items.
         """
+        max_str = VectorStore._META_MAX_STR
+        max_list = VectorStore._META_MAX_LIST
         clean = {}
         for key, value in metadata.items():
-            if isinstance(value, (str, int, float, bool)):
+            if isinstance(value, (int, float, bool)):
                 clean[key] = value
+            elif isinstance(value, str):
+                clean[key] = value[:max_str]
             elif isinstance(value, list):
-                clean[key] = ",".join(str(v) for v in value)
+                clean[key] = ",".join(str(v) for v in value[:max_list])
             elif value is None:
                 clean[key] = ""
             else:
-                clean[key] = str(value)
+                clean[key] = str(value)[:max_str]
         return clean

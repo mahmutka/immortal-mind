@@ -31,6 +31,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _MAX_INPUT_LENGTH = 32_768  # 32KB — prevent memory/DoS via oversized inputs
+_KS_RATE_LIMIT = 50        # max kill switch checks before throttle kicks in
+_KS_THROTTLE_SLEEP = 2.0   # seconds to sleep when rate limit is hit
 
 _BANNER = r"""
   ___                           _        _   __  __ _           _
@@ -297,6 +299,8 @@ def chat_loop(args: argparse.Namespace) -> None:
     if kill_switch_hash:
         logger.info("Kill Switch configured.")
 
+    _ks_check_count = 0  # rate-limit counter for kill switch checks
+
     _start_checkpoint_timer(memory)
 
     provider_name = adapter.provider.upper()
@@ -330,6 +334,11 @@ def chat_loop(args: argparse.Namespace) -> None:
             continue
 
         # Kill Switch check — before sending to LLM
+        if kill_switch_hash is not None:
+            _ks_check_count += 1
+            if _ks_check_count > _KS_RATE_LIMIT:
+                time.sleep(_KS_THROTTLE_SLEEP)
+                _ks_check_count = 0
         if _is_kill_switch(user_input, kill_switch_hash):
             print()
             print("╔══════════════════════════════════════════════════╗")
