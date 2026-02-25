@@ -14,7 +14,7 @@ Pruning Criteria:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
