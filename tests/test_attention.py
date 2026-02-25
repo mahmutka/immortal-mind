@@ -10,7 +10,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cognitio.attention import MultiHeadAttention, HeadWeights
-from cognitio.memory import MemoryRecord, MemoryType, MemoryValence
+from cognitio.memory import MemoryRecord
 
 
 def make_memory_with_embedding(content="Test", embedding=None, **kwargs):

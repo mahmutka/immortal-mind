@@ -28,10 +28,7 @@ from __future__ import annotations
 import logging
 import random
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:
-    from cognitio.engine import CognitioEngine
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
