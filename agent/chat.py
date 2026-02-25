@@ -30,6 +30,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_MAX_INPUT_LENGTH = 32_768  # 32KB — prevent memory/DoS via oversized inputs
 
 _BANNER = r"""
   ___                           _        _   __  __ _           _
@@ -322,6 +323,10 @@ def chat_loop(args: argparse.Namespace) -> None:
             break
 
         if not user_input:
+            continue
+
+        if len(user_input) > _MAX_INPUT_LENGTH:
+            print(f"[Input too long ({len(user_input)} chars). Maximum is {_MAX_INPUT_LENGTH} characters.]")
             continue
 
         # Kill Switch check — before sending to LLM

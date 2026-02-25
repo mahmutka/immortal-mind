@@ -15,6 +15,7 @@ Fallback: Base → Arbitrum → local queue
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -22,6 +23,10 @@ from urllib.parse import urlparse
 from storage.merkle_batcher import MerkleBatcher
 
 logger = logging.getLogger(__name__)
+
+
+_VALID_MEMORY_TYPES = frozenset({"snapshot", "episodic", "semantic", "procedural", "emotional", "genesis"})
+_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 def _validate_rpc_url(url: str) -> bool:
@@ -185,6 +190,18 @@ class BlockchainAnchor:
         Returns:
             dict: {'tx_hash': str, 'chain': str} or None
         """
+        # Input validation
+        if not identity_id or len(identity_id) > 256:
+            raise ValueError(f"Invalid identity_id: must be 1-256 chars")
+        if not _HEX64_RE.match(content_hash):
+            raise ValueError(f"Invalid content_hash: must be 64 hex chars (SHA-256)")
+        if memory_type not in _VALID_MEMORY_TYPES:
+            raise ValueError(f"Invalid memory_type '{memory_type}': must be one of {sorted(_VALID_MEMORY_TYPES)}")
+        if not (0 <= salience_score <= 100):
+            raise ValueError(f"salience_score must be 0-100, got {salience_score}")
+        if len(storage_uri) > 512:
+            raise ValueError(f"storage_uri too long: max 512 chars")
+
         if not self._init_web3():
             logger.warning("Web3 could not be initialized — adding to queue")
             return self._queue_operation({
