@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -54,6 +55,7 @@ class MemoryManager:
         self._recall_limit: int = self.config.get("recall_limit", _DEFAULT_RECALL_LIMIT)
         self._last_time_flush: float = time.monotonic()
         self._time_flush_interval: float = float(self.config.get("time_flush_interval_seconds", 600))
+        self._flush_lock = threading.Lock()
 
         logger.info("MemoryManager ready: identity_id=%s", self.identity_id)
 
@@ -77,7 +79,9 @@ class MemoryManager:
         logger.debug("Added to short-term memory: role=%s, length=%d", role, len(self._short_term))
 
         if len(self._short_term) >= self._short_term_limit:
-            self._flush_to_long_term()
+            with self._flush_lock:
+                if len(self._short_term) >= self._short_term_limit:
+                    self._flush_to_long_term()
 
     def get_recent_messages(self, limit: Optional[int] = None) -> list[dict]:
         """
@@ -110,13 +114,17 @@ class MemoryManager:
         now = time.monotonic()
         elapsed = now - self._last_time_flush
         if elapsed >= self._time_flush_interval and self._short_term:
-            logger.info(
-                "Time-based flush triggered (%.0f seconds elapsed, %d messages pending)",
-                elapsed,
-                len(self._short_term),
-            )
-            self._flush_to_long_term()
-            self._last_time_flush = time.monotonic()
+            with self._flush_lock:
+                # Re-check under lock — another thread may have already flushed
+                if time.monotonic() - self._last_time_flush < self._time_flush_interval:
+                    return False
+                logger.info(
+                    "Time-based flush triggered (%.0f seconds elapsed, %d messages pending)",
+                    elapsed,
+                    len(self._short_term),
+                )
+                self._flush_to_long_term()
+                self._last_time_flush = time.monotonic()
             return True
         return False
 

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,8 @@ class LLMClient:
     """
 
     SUPPORTED_PROVIDERS = ("gemini", "groq", "ollama")
+    _MAX_RETRIES = 3
+    _RETRY_BASE_DELAY = 1.0  # seconds — doubles each attempt (1s, 2s, 4s)
 
     def __init__(self, provider: str = "gemini", config: Optional[dict] = None) -> None:
         self.provider = provider.lower()
@@ -77,30 +80,44 @@ class LLMClient:
         logger.debug("Ollama client ready: url=%s, model=%s", self._ollama_url, self._ollama_model)
 
     def complete(self, prompt: str, system_prompt: Optional[str] = None, max_tokens: int = 1024, temperature: float = 0.7) -> str:
-        """Single-shot text completion."""
-        try:
-            if self.provider == "gemini":
-                return self._complete_gemini(prompt, system_prompt, max_tokens, temperature)
-            elif self.provider == "groq":
-                return self._complete_groq(prompt, system_prompt, max_tokens, temperature)
-            elif self.provider == "ollama":
-                return self._complete_ollama(prompt, system_prompt, max_tokens, temperature)
-        except Exception as e:
-            logger.error("LLM complete error (%s): %s", self.provider, e)
-            raise
+        """Single-shot text completion with exponential backoff retry."""
+        last_exc: Optional[Exception] = None
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                if self.provider == "gemini":
+                    return self._complete_gemini(prompt, system_prompt, max_tokens, temperature)
+                elif self.provider == "groq":
+                    return self._complete_groq(prompt, system_prompt, max_tokens, temperature)
+                elif self.provider == "ollama":
+                    return self._complete_ollama(prompt, system_prompt, max_tokens, temperature)
+            except Exception as e:
+                last_exc = e
+                delay = self._RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning("LLM complete error (%s), attempt %d/%d, retrying in %.1fs: %s",
+                               self.provider, attempt + 1, self._MAX_RETRIES, delay, e)
+                time.sleep(delay)
+        logger.error("LLM complete failed after %d attempts (%s): %s", self._MAX_RETRIES, self.provider, last_exc)
+        raise last_exc
 
     def chat(self, messages: list[dict], system_prompt: Optional[str] = None, max_tokens: int = 1024, temperature: float = 0.7) -> str:
-        """Multi-turn chat completion."""
-        try:
-            if self.provider == "gemini":
-                return self._chat_gemini(messages, system_prompt, max_tokens, temperature)
-            elif self.provider == "groq":
-                return self._chat_groq(messages, system_prompt, max_tokens, temperature)
-            elif self.provider == "ollama":
-                return self._chat_ollama(messages, system_prompt, max_tokens, temperature)
-        except Exception as e:
-            logger.error("LLM chat error (%s): %s", self.provider, e)
-            raise
+        """Multi-turn chat completion with exponential backoff retry."""
+        last_exc: Optional[Exception] = None
+        for attempt in range(self._MAX_RETRIES):
+            try:
+                if self.provider == "gemini":
+                    return self._chat_gemini(messages, system_prompt, max_tokens, temperature)
+                elif self.provider == "groq":
+                    return self._chat_groq(messages, system_prompt, max_tokens, temperature)
+                elif self.provider == "ollama":
+                    return self._chat_ollama(messages, system_prompt, max_tokens, temperature)
+            except Exception as e:
+                last_exc = e
+                delay = self._RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning("LLM chat error (%s), attempt %d/%d, retrying in %.1fs: %s",
+                               self.provider, attempt + 1, self._MAX_RETRIES, delay, e)
+                time.sleep(delay)
+        logger.error("LLM chat failed after %d attempts (%s): %s", self._MAX_RETRIES, self.provider, last_exc)
+        raise last_exc
 
     def health_check(self) -> bool:
         """Check whether the provider is accessible."""
@@ -189,12 +206,12 @@ class LLMClient:
             except json.JSONDecodeError:
                 pass
 
-        # 3. First { ... } block (ReDoS protection: max 8KB)
+        # 3. First { ... } block — regex-free JSON scan (no ReDoS risk)
         if len(text) <= 8192:
-            match = re.search(r"\{[\s\S]+\}", text)
-            if match:
+            idx = text.find("{")
+            if idx != -1:
                 try:
-                    data = json.loads(match.group(0))
+                    data, _ = json.JSONDecoder().raw_decode(text, idx)
                     if isinstance(data, dict):
                         return _fill_defaults(data)
                 except json.JSONDecodeError:
