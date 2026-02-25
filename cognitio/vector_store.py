@@ -53,9 +53,9 @@ class VectorStore:
                 metadata={"hnsw:space": "cosine"},  # Cosine similarity
             )
             logger.info(
-                f"VectorStore initialized: dir={self.persist_dir}, "
-                f"collection={self.collection_name}, "
-                f"record_count={self._collection.count()}"
+                "VectorStore initialized: collection=%s, record_count=%d",
+                self.collection_name,
+                self._collection.count(),
             )
         except ImportError:
             logger.error("chromadb not installed: pip install chromadb")
