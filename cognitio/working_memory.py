@@ -53,10 +53,7 @@ class WorkingMemory:
         os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
         self._initialize_db()
 
-        logger.info(
-            "WorkingMemory initialized: checkpoint_every=%dmsg",
-            checkpoint_every_n,
-        )
+        logger.info("WorkingMemory initialized.")
 
     def _get_connection(self) -> sqlite3.Connection:
         """Create a SQLite connection with WAL mode."""
