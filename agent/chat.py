@@ -270,18 +270,40 @@ def _handle_command(cmd: str, memory, adapter, engine=None) -> bool:
 
 def _load_kill_switch_hash() -> Optional[str]:
     """
-    Load the Kill Switch SHA-256 hash from environment variables.
+    Load the Kill Switch hash from environment variables.
 
     Priority order:
-        1. IMP_KILL_SWITCH_HASH (direct SHA-256 hex)
-        2. IMP_KILL_SWITCH (plain-text → hashed)
+        1. IMP_KILL_SWITCH_HASH (PBKDF2-HMAC-SHA256 hex digest)
+        2. IMP_KILL_SWITCH (plain-text passphrase → hashed with PBKDF2)
+
+    IMPORTANT: IMP_KILL_SWITCH_HASH must be a PBKDF2-HMAC-SHA256 hash,
+    NOT a plain SHA-256 hash. Generate with:
+        python -c "
+        import hashlib
+        print(hashlib.pbkdf2_hmac(
+            'sha256', b'your_passphrase',
+            b'IMP-kill-switch-salt-v1', 100_000
+        ).hex())"
 
     Returns:
-        str | None: SHA-256 hex digest or None
+        str | None: PBKDF2-HMAC-SHA256 hex digest or None
     """
     env_hash = os.getenv("IMP_KILL_SWITCH_HASH")
     if env_hash:
-        return env_hash.lower()
+        h = env_hash.strip().lower()
+        if len(h) != 64 or not all(c in "0123456789abcdef" for c in h):
+            logger.error(
+                "IMP_KILL_SWITCH_HASH format invalid (expected 64 hex chars). "
+                "Kill switch disabled. Generate with: python -c \""
+                "import hashlib; print(hashlib.pbkdf2_hmac("
+                "'sha256', b'passphrase', b'IMP-kill-switch-salt-v1', 100_000).hex())\""
+            )
+            return None
+        logger.info(
+            "Kill switch loaded from IMP_KILL_SWITCH_HASH. "
+            "Ensure this is a PBKDF2-HMAC-SHA256 hash, not plain SHA-256."
+        )
+        return h
 
     env_plain = os.getenv("IMP_KILL_SWITCH")
     if env_plain:

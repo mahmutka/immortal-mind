@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import queue
+import tempfile
 import threading
 from datetime import datetime, timezone
 
@@ -167,6 +168,11 @@ class CognitioEngine:
         self._pending_notes: list[str] = []
         self._consolidation_lock = threading.Lock()
         self._start_consolidation_worker()
+
+        # Save / memory-store lock — prevents a concurrent save_state() from
+        # iterating memory_store while the consolidation thread is mutating it
+        # (RuntimeError: dictionary changed size during iteration).
+        self._save_lock = threading.RLock()
 
         # Kill Switch passphrase (stored as SHA-256 hex digest)
         # Environment variable: IMP_KILL_SWITCH_HASH (SHA-256 hex)
@@ -579,84 +585,91 @@ class CognitioEngine:
         # Stamp temporal_density
         memory.temporal_density = self.temporal.compute_density()
 
-        # 5. Contradiction check with existing memories (ConfirmationBias)
-        candidate_ids = self.vector_store.query(embedding, n_results=10)
-        for cand_id in candidate_ids[:3]:  # Check first 3 for contradictions
-            existing = self.memory_store.get(cand_id)
-            if existing is None:
-                continue
+        # 5-7. Contradiction check + memory write + character update
+        # ── All memory_store mutations are inside _save_lock ──────────────
+        # save_state() holds the same lock while serialising memory_store,
+        # so these two operations are mutually exclusive (no concurrent
+        # iteration + mutation → no RuntimeError / inconsistent snapshot).
+        with self._save_lock:
+            # 5. Contradiction check with existing memories (ConfirmationBias)
+            candidate_ids = self.vector_store.query(embedding, n_results=10)
+            for cand_id in candidate_ids[:3]:  # Check first 3 for contradictions
+                existing = self.memory_store.get(cand_id)
+                if existing is None:
+                    continue
 
-            similarity = self.embedder.cosine_similarity(embedding, existing.embedding or [])
-            if similarity > 0.85:  # Very similar content → update candidate
-                outcome = self.biases.evaluate_contradiction(
-                    existing.entrenchment,
-                    adjusted_confidence,
-                    entity_id="default",
-                )
-
-                if outcome == "accepted":
-                    existing.reinforce()
-                    self.memory_store.update(existing)
-                    self.vector_store.update_metadata(
-                        existing.id,
-                        {"entrenchment": existing.entrenchment}
-                    )
-                    self.epistemic.update_from_memory(existing, "reinforced")
-                    return True, None  # Updated, no new record added
-
-                elif outcome == "ambivalent":
-                    # At peace with contradiction — both records marked ambivalent
-                    existing.is_ambivalent = True
-                    memory.is_ambivalent = True
-                    existing.contradiction_count += 1
-                    self.memory_store.update(existing)
-                    self.epistemic.update_from_memory(existing, "ambivalent")
-                    # Ambivalent memory still gets added
-                    break
-
-                elif outcome == "rejected":
-                    existing.contradiction_count += 1
-                    self.memory_store.update(existing)
-                    self.epistemic.update_from_memory(existing, "contradicted")
-
-                    # Crisis check
-                    if self.biases.confirmation.should_trigger_crisis(
-                        existing.contradiction_count,
-                        adjusted_confidence,
+                similarity = self.embedder.cosine_similarity(embedding, existing.embedding or [])
+                if similarity > 0.85:  # Very similar content → update candidate
+                    outcome = self.biases.evaluate_contradiction(
                         existing.entrenchment,
-                    ):
-                        self.character.trigger_belief_crisis(existing)
-                        self.garbage_collector.register_crisis_memory(existing.id)
-                        self.state.belief_crises_experienced += 1
-                        logger.warning(f"Belief crisis triggered: {existing.id[:8]}")
-
-                    contradiction_note = (
-                        f"I just noticed a contradiction regarding '{content[:60]}...'."
+                        adjusted_confidence,
+                        entity_id="default",
                     )
-                    return False, contradiction_note  # Rejected
 
-        # 6. Add new record
-        self.epistemic.update_from_memory(memory, "added")
-        self.memory_store.add(memory)
-        self.vector_store.add(
-            memory.id,
-            embedding,
-            {
-                "memory_type": memory.memory_type.value,
-                "emotional_intensity": memory.emotional_intensity,
-                "emotional_valence": memory.emotional_valence.value,
-                "entrenchment": memory.entrenchment,
-                "is_anchor": memory.is_anchor,
-                "tags": ",".join(memory.tags),
-                "created_at": memory.created_at.isoformat(),
-            },
-        )
+                    if outcome == "accepted":
+                        existing.reinforce()
+                        self.memory_store.update(existing)
+                        self.vector_store.update_metadata(
+                            existing.id,
+                            {"entrenchment": existing.entrenchment}
+                        )
+                        self.epistemic.update_from_memory(existing, "reinforced")
+                        return True, None  # Updated, no new record added
 
-        # 7. Update character
-        self.character.update_personality(memory)
-        all_active = self.memory_store.get_all_active()
-        self.state.character_strength = self.character.compute_character_strength(all_active)
-        self.attention.update_character_strength(self.state.character_strength)
+                    elif outcome == "ambivalent":
+                        # At peace with contradiction — both records marked ambivalent
+                        existing.is_ambivalent = True
+                        memory.is_ambivalent = True
+                        existing.contradiction_count += 1
+                        self.memory_store.update(existing)
+                        self.epistemic.update_from_memory(existing, "ambivalent")
+                        # Ambivalent memory still gets added
+                        break
+
+                    elif outcome == "rejected":
+                        existing.contradiction_count += 1
+                        self.memory_store.update(existing)
+                        self.epistemic.update_from_memory(existing, "contradicted")
+
+                        # Crisis check
+                        if self.biases.confirmation.should_trigger_crisis(
+                            existing.contradiction_count,
+                            adjusted_confidence,
+                            existing.entrenchment,
+                        ):
+                            self.character.trigger_belief_crisis(existing)
+                            self.garbage_collector.register_crisis_memory(existing.id)
+                            self.state.belief_crises_experienced += 1
+                            logger.warning(f"Belief crisis triggered: {existing.id[:8]}")
+
+                        contradiction_note = (
+                            f"I just noticed a contradiction regarding '{content[:60]}...'."
+                        )
+                        return False, contradiction_note  # Rejected
+
+            # 6. Add new record
+            self.epistemic.update_from_memory(memory, "added")
+            self.memory_store.add(memory)
+            self.vector_store.add(
+                memory.id,
+                embedding,
+                {
+                    "memory_type": memory.memory_type.value,
+                    "emotional_intensity": memory.emotional_intensity,
+                    "emotional_valence": memory.emotional_valence.value,
+                    "entrenchment": memory.entrenchment,
+                    "is_anchor": memory.is_anchor,
+                    "tags": ",".join(memory.tags),
+                    "created_at": memory.created_at.isoformat(),
+                },
+            )
+
+            # 7. Update character
+            self.character.update_personality(memory)
+            all_active = self.memory_store.get_all_active()
+            self.state.character_strength = self.character.compute_character_strength(all_active)
+            self.attention.update_character_strength(self.state.character_strength)
+        # ──────────────────────────────────────────────────────────────────
 
         logger.debug(f"New memory added: {memory.id[:8]}, type={memory.memory_type.value}")
         return True, None
@@ -879,28 +892,55 @@ class CognitioEngine:
                 os.path.join(self.data_dir, "memories.json")
             )
 
-        data = {
-            "saved_at": datetime.now(timezone.utc).isoformat(),
-            "cognitive_state": self.state.to_dict(),
-            "personality": self.character.personality.to_dict(),
-            "memories": self.memory_store.to_dict(),
-            # New layers
-            "temporal": self.temporal.to_dict(),
-            "somatic": self.somatic.to_dict(),
-            "epistemic": self.epistemic.to_dict(),
-            "narrative": self.narrative.to_dict(),
-            "relational": self.character.relational.to_dict(),
-            "dream": self.dream.to_dict(),
-            "existential": self.existential.to_dict(),
-            "predictive": self.predictive.to_dict(),
-        }
+        # ── Snapshot under lock ────────────────────────────────────────────
+        # _save_lock prevents a concurrent _checkpoint_memory() call from
+        # modifying memory_store while we iterate it here.
+        # The lock is held only for the fast in-memory serialisation step,
+        # NOT during file I/O (which can be slow).
+        with self._save_lock:
+            data = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "cognitive_state": self.state.to_dict(),
+                "personality": self.character.personality.to_dict(),
+                "memories": self.memory_store.to_dict(),
+                # New layers
+                "temporal": self.temporal.to_dict(),
+                "somatic": self.somatic.to_dict(),
+                "epistemic": self.epistemic.to_dict(),
+                "narrative": self.narrative.to_dict(),
+                "relational": self.character.relational.to_dict(),
+                "dream": self.dream.to_dict(),
+                "existential": self.existential.to_dict(),
+                "predictive": self.predictive.to_dict(),
+            }
+            mem_count = self.memory_store.count()
+        # ──────────────────────────────────────────────────────────────────
 
-        os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else ".", exist_ok=True)
+        # ── Atomic file write (outside lock) ──────────────────────────────
+        # Write to a temp file in the same directory, then rename.
+        # os.replace() is atomic on both POSIX and Windows (NTFS), so a
+        # crash mid-write never leaves a corrupt memories.json.
+        save_dir = os.path.dirname(filepath) if os.path.dirname(filepath) else "."
+        os.makedirs(save_dir, exist_ok=True)
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=save_dir, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                os.replace(tmp_path, filepath)
+            except Exception:
+                # Clean up orphaned temp file on error
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            logger.error("save_state failed: %s", e)
+            raise
+        # ──────────────────────────────────────────────────────────────────
 
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-
-        logger.info(f"State saved: {filepath} ({self.memory_store.count()} memories)")
+        logger.info("State saved: %s (%d memories)", filepath, mem_count)
 
     def _load_state(self, filepath: str) -> None:
         """Load memory state from JSON."""
@@ -1109,16 +1149,38 @@ class CognitioEngine:
         Load the Kill Switch passphrase hash from environment variables or config.
 
         Priority order:
-            1. IMP_KILL_SWITCH_HASH (SHA-256 hex digest directly)
-            2. IMP_KILL_SWITCH (plain-text passphrase → hashed)
-            3. config["kill_switch_passphrase"] (plain-text → hashed)
+            1. IMP_KILL_SWITCH_HASH (PBKDF2-HMAC-SHA256 hex digest)
+            2. IMP_KILL_SWITCH (plain-text passphrase → hashed with PBKDF2)
+            3. config["kill_switch_passphrase"] (plain-text → hashed with PBKDF2)
+
+        IMPORTANT: IMP_KILL_SWITCH_HASH must be a PBKDF2-HMAC-SHA256 hash,
+        NOT a plain SHA-256 hash. Generate with:
+            python -c "
+            import hashlib
+            print(hashlib.pbkdf2_hmac(
+                'sha256', b'your_passphrase',
+                b'IMP-kill-switch-salt-v1', 100_000
+            ).hex())"
 
         Returns:
-            str | None: SHA-256 hex digest or None (not configured)
+            str | None: PBKDF2-HMAC-SHA256 hex digest or None (not configured)
         """
         env_hash = os.getenv("IMP_KILL_SWITCH_HASH")
         if env_hash:
-            return env_hash.lower()
+            h = env_hash.strip().lower()
+            if len(h) != 64 or not all(c in "0123456789abcdef" for c in h):
+                logger.error(
+                    "IMP_KILL_SWITCH_HASH format invalid (expected 64 hex chars). "
+                    "Kill switch disabled. Generate with: python -c \""
+                    "import hashlib; print(hashlib.pbkdf2_hmac("
+                    "'sha256', b'passphrase', b'IMP-kill-switch-salt-v1', 100_000).hex())\""
+                )
+                return None
+            logger.info(
+                "Kill switch loaded from IMP_KILL_SWITCH_HASH. "
+                "Ensure this is a PBKDF2-HMAC-SHA256 hash, not plain SHA-256."
+            )
+            return h
 
         env_plain = os.getenv("IMP_KILL_SWITCH")
         if env_plain:

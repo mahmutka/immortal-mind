@@ -162,14 +162,27 @@ contract ImmortalMind {
     // ─────────────────────────────────────────────
 
     /**
-     * @notice Yeni AI kimliği kaydet
-     * @param identityId Kimlik hash'i (klient tarafında SHA256 hesaplanır)
+     * @notice Yeni AI kimliği kaydet.
+     *
+     * @dev Frontrunning koruması (SWC-114): identityId artık klient tarafında
+     *      belirlenmez; on-chain olarak keccak256(msg.sender, salt) ile türetilir.
+     *      Böylece saldırgan mempool'da salt değerini görse bile kendi adresiyle
+     *      farklı bir identityId üretir — aynı identityId'yi çalamaz.
+     *
+     *      Off-chain identityId hesabı:
+     *        Web3.solidity_keccak(['address','bytes32'], [guardian_address, salt])
+     *      veya Solidity:
+     *        keccak256(abi.encodePacked(guardian, salt))
+     *
+     * @param salt         Klient tarafından seçilen rastgele 32 bayt (ör. SHA-256(private_nonce))
      * @param modelFingerprint LLM model tanımlayıcısı
      */
     function registerIdentity(
-        bytes32 identityId,
+        bytes32 salt,
         string calldata modelFingerprint
     ) external {
+        // identityId = keccak256(guardian_address || salt) — frontrun-proof
+        bytes32 identityId = keccak256(abi.encodePacked(msg.sender, salt));
         require(!identities[identityId].exists, "Kimlik zaten kayitli");
 
         identities[identityId] = Identity({
@@ -188,6 +201,21 @@ contract ImmortalMind {
         registeredIdentities.push(identityId);
 
         emit IdentityRegistered(identityId, msg.sender, modelFingerprint);
+    }
+
+    /**
+     * @notice Off-chain identity ID hesaplamak için yardımcı view fonksiyon.
+     *
+     * @param guardian  Guardian adresi (kayıt yapacak cüzdan)
+     * @param salt      registerIdentity() çağrısında kullanılacak salt değeri
+     * @return          On-chain identity storage key'i
+     */
+    function computeIdentityId(address guardian, bytes32 salt)
+        external
+        pure
+        returns (bytes32)
+    {
+        return keccak256(abi.encodePacked(guardian, salt));
     }
 
     /**
