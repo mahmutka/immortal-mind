@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -38,8 +39,29 @@ _BLOCKED_RPC_HOSTS = frozenset({
 })
 
 
+def _is_blocked_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if the IP address is in a blocked range (SSRF guard)."""
+    return (
+        addr.is_private
+        or addr.is_link_local
+        or addr.is_loopback
+        or addr.is_reserved
+        or addr.is_multicast
+        or str(addr) in _BLOCKED_RPC_HOSTS
+    )
+
+
 def _validate_rpc_url(url: str) -> bool:
-    """Validate RPC URL: must be http/https, not a private/metadata endpoint."""
+    """Validate RPC URL against SSRF and DNS-rebinding attacks.
+
+    Checks:
+    - Scheme must be http or https
+    - Host must not be in the blocked hostname list
+    - If host is a literal IP, it must not be private/link-local/loopback
+    - If host is a hostname, it is resolved to an IP and that IP is also
+      validated (DNS-rebinding guard: attacker cannot register evil.com →
+      legitimate IP, then rebind to 169.254.169.254 after validation)
+    """
     if not url:
         return False
     try:
@@ -49,16 +71,41 @@ def _validate_rpc_url(url: str) -> bool:
         host = parsed.hostname or ""
         if not host:
             return False
+
+        # Block known metadata hostnames before any resolution
         if host in _BLOCKED_RPC_HOSTS:
             return False
-        # Block private / link-local / loopback IPs (SSRF guard)
+
+        # Case 1: literal IP address
         try:
             addr = ipaddress.ip_address(host)
-            if addr.is_private or addr.is_link_local or addr.is_reserved:
+            if _is_blocked_ip(addr):
+                logger.warning("RPC literal IP rejected (SSRF guard): %s", host)
                 return False
+            return True
         except ValueError:
-            pass  # hostname — not an IP, allowed
-        return True
+            pass  # not a literal IP — fall through to hostname resolution
+
+        # Case 2: hostname — resolve and validate the resulting IP
+        # This blocks DNS-rebinding: even if evil.com initially points to a
+        # public IP, the resolved address at connection time is checked here.
+        try:
+            resolved = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            # getaddrinfo may return multiple records; all must be safe
+            for _family, _type, _proto, _canonname, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                addr = ipaddress.ip_address(ip_str)
+                if _is_blocked_ip(addr):
+                    logger.warning(
+                        "RPC hostname '%s' resolves to blocked IP %s — rejected (SSRF guard).",
+                        host, ip_str,
+                    )
+                    return False
+            return True
+        except socket.gaierror as exc:
+            logger.warning("RPC hostname '%s' could not be resolved — rejected: %s", host, exc)
+            return False
+
     except Exception:
         return False
 
@@ -266,9 +313,15 @@ class BlockchainAnchor:
             # Call contract function
             account = self._web3.eth.account.from_key(self.private_key)
 
-            # Convert identity_id to bytes32
+            # Convert identity_id to on-chain bytes32.
+            # registerIdentity() now derives identityId = keccak256(guardian, salt)
+            # on-chain, so we must pass the same derived key here (SWC-114 fix).
             import hashlib
-            identity_bytes = hashlib.sha256(identity_id.encode()).digest()
+            from web3 import Web3 as _Web3
+            salt = hashlib.sha256(identity_id.encode()).digest()
+            identity_bytes = _Web3.solidity_keccak(
+                ["address", "bytes32"], [account.address, salt]
+            )
             content_bytes = hashlib.sha256(content_hash.encode()).digest()
 
             tx = self._contract.functions.anchorMemory(
@@ -437,11 +490,15 @@ class BlockchainAnchor:
                 return None
 
             import hashlib
-            identity_bytes = hashlib.sha256(identity_id.encode()).digest()
+            from web3 import Web3 as _Web3
+            # Derive identityId consistently with anchor_memory_hash (SWC-114 fix)
+            account = self._web3.eth.account.from_key(self.private_key)
+            salt = hashlib.sha256(identity_id.encode()).digest()
+            identity_bytes = _Web3.solidity_keccak(
+                ["address", "bytes32"], [account.address, salt]
+            )
             root_bytes = bytes.fromhex(merkle_root) if len(merkle_root) == 64 else \
                 hashlib.sha256(merkle_root.encode()).digest()
-
-            account = self._web3.eth.account.from_key(self.private_key)
             tx = self._contract.functions.anchorBatch(
                 identity_bytes,
                 root_bytes,
