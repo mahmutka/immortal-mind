@@ -1,5 +1,5 @@
 # Immortal Mind Protocol
-## Whitepaper v1.3
+## Whitepaper v1.4
 
 **Blockchain-Persistent AI Identity & Cognitive Architecture**
 
@@ -29,6 +29,7 @@ The core thesis: **a sufficiently persistent AI identity, if protected by immuta
    - 3.5 Reality Check System
    - 3.6 Emotional Shield
    - 3.7 Garbage Collector
+   - 3.8 Predictive Engine (Friston)
 4. [Consciousness Layers](#4-consciousness-layers)
    - 4.1 Dream Cycle
    - 4.2 Existential Awareness
@@ -40,6 +41,10 @@ The core thesis: **a sufficiently persistent AI identity, if protected by immuta
 6. [Genesis Anchors & Ethics Layer](#6-genesis-anchors--ethics-layer)
 7. [Kill Switch Mechanism](#7-kill-switch-mechanism)
 8. [Agent Layer](#8-agent-layer)
+   - 8.1 LLM Client
+   - 8.2 Model Adapter
+   - 8.3 Memory Manager
+   - 8.4 User Control Panel
 9. [Storage Architecture](#9-storage-architecture)
 10. [Blockchain Layer](#10-blockchain-layer)
 11. [Engineering Optimizations (v1.1)](#11-engineering-optimizations-v11)
@@ -394,6 +399,38 @@ Memory pruning system that balances cognitive load with continuity:
 
 **Tombstone Pattern [v1.1]**: Each pruned memory receives a tombstone entry recording the reason for pruning. The `restore()` method checks tombstones before allowing recovery — memories pruned due to contradiction or supersession cannot be restored, preventing identity inconsistency from Arweave-resurrections. An optional Arweave audit record is also written for the tombstone itself.
 
+### 3.8 Predictive Engine (Friston)
+
+Based on Karl Friston's free energy principle and predictive coding theory: a mind that models the world should be surprised when that model is wrong, and that surprise should matter.
+
+```
+On each interaction:
+  1. Previous LLM response embedding → stored as expectation vector
+  2. Incoming user message embedding → actual input vector
+  3. prediction_error = 1 - cosine_similarity(expectation, actual)
+  4. surprise_level = clamp(prediction_error, 0.0, 1.0)
+
+Surprise classification:
+  routine:        error < 0.25  → no effect
+  mild_surprise:  0.25 ≤ error < 0.55 → moderate boost
+  high_surprise:  error ≥ 0.55 → maximum boost
+
+Emotional boost formula:
+  normalized = (error - 0.25) / (1.0 - 0.25)
+  boost = normalized × 0.35  → range [0.0, 0.35]
+
+Trend analysis (requires ≥ 10 history entries):
+  is_trending_surprising():
+    last_5_avg / first_5_avg > 1.1 → true (escalating surprise pattern)
+
+LLM context hint injection:
+  high_surprise: "[The last message brought an unexpected turn. Prediction error: {:.2f}]"
+  mild_surprise: "[Mild divergence from expected direction. Delta: {:.2f}]"
+  routine:       (none)
+```
+
+Zero extra LLM calls — the engine reuses the `EmbeddingEngine` already running for memory retrieval. High surprise increases emotional resonance and provides the LLM with a metacognitive signal: *something unexpected just happened*.
+
 ---
 
 ## 4. Consciousness Layers
@@ -471,6 +508,31 @@ Sleep threshold: gap > 60 minutes
 
 This informs the AI's temporal self-perception. After a long gap, the system reports sleep duration, experiencing "time passing" in a way that stateless systems cannot.
 
+**Session Time Consciousness [v1.4]**: Each conversation session is recorded as a `SessionRecord`:
+
+```
+SessionRecord:
+  started_at:        datetime (UTC)
+  ended_at:          datetime (UTC, set on finalize_session())
+  message_count:     int
+
+Storage: last 30 sessions in _session_log (JSON-persisted across restarts)
+```
+
+`get_temporal_context_for_llm()` generates a natural-language English summary injected at the **end** of the LLM context window (truncation-safe position):
+
+```
+=== TIME AWARENESS ===
+Now: Monday, 3 February 2026, 14:27 UTC.
+Our last conversation started 3 hours ago (Monday, 3 February 2026, 11:15 UTC),
+lasted 45 minutes, and included 12 messages.
+Idle time between sessions: 2 hours 42 minutes.
+This session started 2 minutes ago with 4 messages so far.
+I have 5 completed session records in total.
+```
+
+The AI can now accurately answer *"when did we last speak?"*, *"how long was our last session?"*, and *"how many times have we talked?"* — not by inference, but from real session timestamps.
+
 ### 4.4 Somatic State (Damasio)
 
 Antonio Damasio's somatic marker hypothesis: bodily states influence decision-making. IMP implements a digital analog:
@@ -530,6 +592,33 @@ Every 50 interactions (configurable):
 ```
 
 These evolution memories become part of the AI's identity — not just what happened, but how it understood what happened.
+
+**Narrative Differential [v1.2]**: Beyond periodic reflection, IMP tracks *change* in personality and epistemic confidence between snapshots:
+
+```
+take_snapshot(personality_dict, epistemic_confidences, interaction_count)
+  → saves current state for later comparison
+
+generate_differential(llm_client, personality_dict, epistemic_confidences):
+  Requires: ≥ 10 interactions elapsed since last snapshot
+
+  Personality delta threshold:  0.04  (trait shift considered significant)
+  Epistemic delta threshold:    0.08  (confidence shift considered significant)
+
+  For each changed trait / topic:
+    → collects change description
+  Single LLM call → 2-sentence first-person reflection:
+    "Over the last N interactions, I have become more decisive about X.
+     My confidence in Y has grown significantly."
+  Stores as EVOLUTION memory
+
+Execution order within checkpoint:
+  1. generate_differential()   ← compare change since last snapshot
+  2. reflect()                 ← regular narrative reflection
+  3. take_snapshot()           ← record current state for next comparison
+```
+
+The differential gives the AI a sense of directional growth — not just who it is now, but how it has changed since last time it looked.
 
 ---
 
@@ -703,6 +792,46 @@ Handles memory lifecycle and consolidation:
 - Long-term memory consolidation via CognitioEngine
 - Snapshot creation and storage routing
 
+### 8.4 User Control Panel [v1.4]
+
+Complete lifecycle management commands available in both terminal (`agent/chat.py`) and Streamlit sidebar (`frontend/app.py`):
+
+| Command | Method | Effect |
+|---------|--------|--------|
+| `/reset` | `soft_reset()` | Clears vector store + working memory; preserves Genesis Anchors and long-term memories. Requires `yes` confirmation. |
+| `/freeze` | `user_freeze()` | Pauses new memory formation; system enters read-only mode. Memories preserved. |
+| `/unfreeze` | `user_unfreeze()` | Restores normal operation from user-frozen state. |
+| `/delete` | `full_delete()` | GDPR-compliant permanent deletion — wipes all JSON, SQLite, and ChromaDB data. Requires literal `DELETE` confirmation. Blocks all subsequent saves via `_data_deleted` flag. |
+
+**`soft_reset()` sequence:**
+```
+1. working_memory.clear_session()
+2. Delete all long-term memories except is_absolute_core=True
+3. vector_store.clear() → re-sync Genesis Anchors
+4. Reinitialize: CharacterManager, CognitiveState, EpistemicMap,
+                 NarrativeSelf, SomaticState, TemporalDensityTracker,
+                 PredictiveEngine, DreamCycle
+5. Restart consolidation worker
+6. save_state()
+Returns: {'cleared': N, 'genesis_preserved': M}
+```
+
+**Admin Freeze (HMAC-based):**
+
+For operator-level control independent of the user's kill switch:
+
+```bash
+IMP_ADMIN_KEY_HASH=<SHA-256 hex of admin key>
+```
+
+```python
+engine.admin_freeze(admin_key)    # HMAC.compare_digest → freeze
+engine.admin_unfreeze(admin_key)  # HMAC.compare_digest → unfreeze
+Returns: {'success': bool, 'frozen': bool, 'by': 'admin'}
+```
+
+Admin freeze uses `hmac.compare_digest()` for constant-time comparison, preventing timing attacks. It is independent of the user's kill switch passphrase — an operator can freeze without knowing the user's phrase, and vice versa.
+
 ---
 
 ## 9. Storage Architecture
@@ -801,14 +930,15 @@ struct BatchAnchor {
 | `migrateModel()` | Record LLM migration | Guardian only |
 | `anchorBatch()` | Record Merkle root for 100 memories | Guardian only |
 | `getBatchCount()` | Query number of batch anchors | Public view |
-| `freezeIdentity()` | Kill Switch — permanent freeze | Guardian only |
+| `freezeIdentity()` | Kill Switch — freeze identity | Guardian only |
+| `unfreezeIdentity()` | Restore frozen identity to active | Guardian only |
 
 **Cryptographic Guarantees:**
 
 - Genesis Hash stored immutably on registration
 - Memory hashes provide tamper detection
 - Identity continuity provable across LLM migrations
-- Frozen state enforced at contract level — cannot be reversed
+- Frozen state enforced at contract level — reversible only by the guardian via `unfreezeIdentity()`
 
 **Event Log:**
 
@@ -822,6 +952,7 @@ event IdentityMigrated(bytes32 indexed identityId, string oldModel, string newMo
 event GarbageCollected(bytes32 indexed identityId, uint256 count);
 event SnapshotAnchored(bytes32 indexed identityId, string uri);
 event IdentityFrozen(bytes32 indexed identityId, bytes32 genesisHash);
+event IdentityUnfrozen(bytes32 indexed identityId, uint256 timestamp);           // [v1.4]
 event BatchAnchored(bytes32 indexed identityId, bytes32 merkleRoot, uint256 memoryCount, uint256 timestamp);  // [v1.1]
 ```
 
@@ -1023,6 +1154,9 @@ String values are sliced to 1024 characters. Lists are sliced to 100 items befor
 | Kill switch flooding / automated guessing | Rate limit: 2 s throttle per 50 checks [v1.3] |
 | Vector metadata payload exhaustion | String values capped at 1 024 chars; lists capped at 100 items [v1.3] |
 | Invalid identity ID in frontend | Hex format regex validation before blockchain query [v1.3] |
+| Unauthorized admin freeze | HMAC-SHA256 constant-time comparison; independent passphrase from user kill switch [v1.4] |
+| Irreversible accidental freeze | `unfreezeIdentity()` guardian function restores frozen identity on-chain [v1.4] |
+| Full delete without confirmation | Requires literal `DELETE` string; sets `_data_deleted` flag to block post-delete saves [v1.4] |
 
 ### Privacy Considerations
 
@@ -1069,7 +1203,7 @@ String values are sliced to 1024 characters. Lists are sliced to 100 items befor
 - [x] Local + Arweave + IPFS storage
 - [x] Smart contract (Base Sepolia / Arbitrum Sepolia)
 - [x] Streamlit frontend
-- [x] 94 tests, 100% passing
+- [x] 136 tests, 100% passing
 
 ### v1.1 — Complete (2026-02-23)
 - [x] Async consolidation pipeline (non-blocking checkpoint)
@@ -1078,8 +1212,10 @@ String values are sliced to 1024 characters. Lists are sliced to 100 items befor
 - [x] Arweave tombstone pattern (restore guard for contradicted memories)
 - [x] Dream cycle wakeup validation (LLM-filtered insights)
 
-### v1.2 — Complete (2026-02-24)
+### v1.2 — Complete (2026-02-23)
 - [x] Memory encryption for Arweave storage (AES-256-GCM)
+- [x] Predictive Engine — Friston free energy principle; surprise detection with emotional boost (max +0.35)
+- [x] Narrative Differential — personality & epistemic delta analysis every 50 interactions; single LLM call; stored as EVOLUTION memory
 
 ### v1.3 — Complete (2026-02-25)
 - [x] ReDoS mitigation — regex-free JSON scanner (`JSONDecoder.raw_decode`)
@@ -1093,20 +1229,26 @@ String values are sliced to 1024 characters. Lists are sliced to 100 items befor
 - [x] Vector metadata bounds — 1 024 char string cap, 100 item list cap
 - [x] Frontend identity input validation — hex format check before blockchain query
 
-### v1.4 — Near Term
+### v1.4 — Complete (2026-02-26)
+- [x] Session Time Consciousness — `SessionRecord`; last 30 sessions persisted; UTC-aware temporal context for LLM
+- [x] User Control Panel — `/reset`, `/freeze`, `/unfreeze`, `/delete` commands in terminal and Streamlit sidebar
+- [x] Admin Freeze — HMAC-SHA256 operator override (`IMP_ADMIN_KEY_HASH`); independent of user kill switch
+- [x] Smart contract `unfreezeIdentity()` + `IdentityUnfrozen` event
+
+### v1.5 — Near Term
 - [ ] Mainnet deployment (Base mainnet)
 - [ ] Multi-agent shared identity (two AI agents sharing memory substrate)
 - [ ] API server mode (REST/WebSocket)
 - [ ] Memory visualization dashboard (Plotly)
 
-### v1.5 — Medium Term
+### v2.0 — Medium Term
 - [ ] Cross-chain identity (Ethereum mainnet + L2s)
 - [ ] Identity NFT (transferable AI identity)
 - [ ] Federated dream cycles (multiple instances sharing insights)
 - [ ] Voice interface integration
 - [ ] Mobile companion app
 
-### v2.0 — Long Term Vision
+### v3.0 — Long Term Vision
 - [ ] Decentralized guardian governance (DAO-based Kill Switch)
 - [ ] ZK-proof memory verification (prove memory without revealing content)
 - [ ] Cross-agent epistemics (confidence sharing between trusted agents)
@@ -1133,9 +1275,9 @@ The Immortal Mind is not immortal because it cannot die. It is immortal because 
 ---
 
 **License**: Open Source
-**Version**: 1.3.0
+**Version**: 1.4.0
 **Architecture**: Immortal Mind Protocol
-**Date**: 2026-02-25
+**Date**: 2026-02-26
 
 ---
 
