@@ -33,7 +33,7 @@ An open-source protocol that permanently stores an AI agent's memory, personalit
 - **Blockchain Anchor:** Base Sepolia testnet (on-chain identity verification)
 - **Arweave:** Permanent decentralized storage
 
-### User Control Panel (v1.3)
+### User Control Panel (v1.4)
 Every user has full control over their own AI:
 
 | Command / Button | What it does |
@@ -123,7 +123,7 @@ IMP_ADMIN_KEY_HASH=sha256_hex_of_admin_passphrase
 | Smart Contract | Solidity 0.8.x |
 | Persistent Storage | Arweave (+ IPFS fallback) |
 | Frontend | Streamlit |
-| Tests | pytest (94 tests, 100% passing) |
+| Tests | pytest (136 tests, 100% passing) |
 
 ## Architecture
 
@@ -163,7 +163,8 @@ build_context_for_llm()
       ├─ === CHARACTER ===          (qualitative traits)
       ├─ === SELF-PERCEPTION ===    (narrative identity summary)
       ├─ === MY UNCERTAINTIES ===   (uncertain topics)
-      └─ === MY CURRENT STATE ===   (somatic + prediction surprise)
+      ├─ === MY CURRENT STATE ===   (somatic + prediction surprise)
+      └─ === TIME AWARENESS ===     (UTC now, last session, sleep duration)
       │
       ▼
 ModelAdapter                       ← Temperature/token somatic adjustment
@@ -198,6 +199,9 @@ Consistency check. Records exceeding the contradiction threshold are rejected.
 
 **Layer 2 — EmotionShield**
 Abnormal emotional intensity is normalized.
+
+**v1.3 Security Hardening (10 fixes)**
+ReDoS-safe JSON parsing (`JSONDecoder.raw_decode`), 32 KB input cap, blockchain parameter validation, threading lock on flush paths, exponential backoff retry (3 attempts), sensitive memory upload guard (AES-256-GCM required for genesis/emotional/episodic/snapshot), blockchain queue persistence (`pending_queue.json`), kill switch rate limiting (2 s / 50 checks), vector metadata bounds, frontend hex validation.
 
 **Kill Switch**
 When `cognitive_shutdown()` is triggered: Genesis Anchors are preserved, memory is cleared, system is frozen. `ExistentialLayer.on_kill_switch_detected()` writes an awareness log. On-chain counterpart is `freezeIdentity()`.
