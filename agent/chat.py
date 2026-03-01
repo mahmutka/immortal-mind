@@ -393,9 +393,12 @@ def chat_loop(args: argparse.Namespace) -> None:
                 break
             continue
 
-        memory.add_message("user", user_input)
+        from cognitio.input_sanitizer import sanitize_input
+        sanitized_input = sanitize_input(user_input)
+
+        memory.add_message("user", sanitized_input)
         if engine is not None:
-            engine.process_interaction("user", user_input)
+            engine.process_interaction("user", sanitized_input)
 
         # Context: from long-term memory if engine available, else short-term history
         if engine is not None:

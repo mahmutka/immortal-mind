@@ -10,8 +10,37 @@ import os
 import re
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_ollama_url(url: str) -> str:
+    """Validate Ollama base URL to prevent SSRF attacks.
+
+    Only http:// and https:// schemes are allowed.
+    Credentials (user:pass@host) are forbidden.
+
+    Parameters:
+        url: The URL to validate
+
+    Returns:
+        str: The validated URL
+
+    Raises:
+        ValueError: If the URL is invalid or uses a forbidden scheme
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"OLLAMA_BASE_URL: only http:// and https:// schemes are allowed, "
+            f"got '{parsed.scheme}://'"
+        )
+    if not parsed.hostname:
+        raise ValueError("OLLAMA_BASE_URL: hostname is required")
+    if parsed.username or parsed.password:
+        raise ValueError("OLLAMA_BASE_URL: credentials (user:pass@host) are not allowed")
+    return url
 
 
 class LLMClient:
@@ -74,6 +103,7 @@ class LLMClient:
     def _init_ollama(self) -> None:
         import requests as req
         base_url = self.config.get("base_url") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        base_url = _validate_ollama_url(base_url)
         self._ollama_url = f"{base_url}/api/chat"
         self._ollama_model = self.config.get("model") or os.getenv("OLLAMA_MODEL", "llama3.2")
         self._session = req.Session()

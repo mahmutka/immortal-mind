@@ -33,6 +33,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 CMD ["python", "-m", "streamlit", "run", "frontend/app.py", \
      "--server.port=8501", \
-     "--server.address=0.0.0.0", \
+     "--server.address=127.0.0.1", \
      "--server.headless=true", \
      "--browser.gatherUsageStats=false"]
