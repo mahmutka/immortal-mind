@@ -13,6 +13,7 @@ The AI's inner world cannot be viewed directly.
 Its character, memory, and consciousness can only be discovered through conversation.
 """
 
+import hmac
 import logging
 import os
 import re
@@ -216,6 +217,9 @@ def render_chat():
 
     # User input
     if prompt := st.chat_input("Type your message..."):
+        from cognitio.input_sanitizer import sanitize_input
+        prompt = sanitize_input(prompt)
+
         with st.chat_message("user"):
             st.write(prompt)
 
@@ -360,10 +364,48 @@ def render_resilience():
 
 
 # ─────────────────────────────────────────────
+# AUTHENTICATION
+# ─────────────────────────────────────────────
+
+def check_auth() -> bool:
+    """Check web UI authentication via IMP_WEB_PASSWORD env var.
+
+    If IMP_WEB_PASSWORD is not set, authentication is disabled (backward compatible).
+    Uses hmac.compare_digest for constant-time comparison.
+
+    Returns:
+        bool: True if authenticated or auth is disabled
+    """
+    expected_password = os.getenv("IMP_WEB_PASSWORD")
+    if not expected_password:
+        return True  # Auth disabled — backward compatible
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    st.title("🔒 Immortal Mind Protocol")
+    st.caption("Authentication required")
+    password = st.text_input("Password", type="password", key="auth_password")
+    if st.button("Login", use_container_width=True):
+        if hmac.compare_digest(password, expected_password):
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Invalid password.")
+    return False
+
+
+# ─────────────────────────────────────────────
 # MAIN APPLICATION
 # ─────────────────────────────────────────────
 
 def main():
+    if not check_auth():
+        return
+
     init_session_state()
     render_sidebar()
 
