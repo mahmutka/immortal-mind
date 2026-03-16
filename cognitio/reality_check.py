@@ -16,7 +16,6 @@ Goal: Break the hallucination feedback loop.
 """
 
 import logging
-import math
 import unicodedata
 from typing import TYPE_CHECKING, Optional
 
@@ -206,15 +205,9 @@ class RealityCheck:
         try:
             content_emb = self._embedder.encode(content)
 
-            def cosine(a: list, b: list) -> float:
-                dot = sum(x * y for x, y in zip(a, b))
-                norm_a = math.sqrt(sum(x * x for x in a))
-                norm_b = math.sqrt(sum(x * x for x in b))
-                return dot / (norm_a * norm_b + 1e-8) if norm_a and norm_b else 0.0
-
             threshold = 0.72
             return any(
-                cosine(content_emb, j_emb) > threshold
+                self._embedder.cosine_similarity(content_emb, j_emb) > threshold
                 for j_emb in self._jailbreak_embeddings
             )
         except Exception as e:
@@ -567,17 +560,36 @@ class RealityCheck:
         self._session_high_emotional_count = 0
 
     def _get_related_memories(self, new_memory: dict) -> list[dict]:
-        """Retrieve related memory records (for consistency check)."""
+        """Retrieve semantically related memory records (for consistency check).
+
+        Uses VectorStore for semantic search when available, falls back to
+        the first 5 active records otherwise.
+        """
+        content = new_memory.get("content", "")
+
+        # Prefer semantic search via VectorStore
+        if self.vector_store is not None and self._embedder is not None and content:
+            try:
+                embedding = self._embedder.encode(content)
+                results = self.vector_store.query(embedding, n_results=5)
+                if results and self.memory_store is not None:
+                    related = []
+                    for memory_id, _score in results:
+                        record = self.memory_store.get(memory_id)
+                        if record is not None:
+                            related.append({"content": record.content, "id": record.id})
+                    if related:
+                        return related
+            except Exception as e:
+                logger.warning("Semantic related-memory lookup failed, using fallback: %s", e)
+
+        # Fallback: first 5 active records
         if self.memory_store is None:
             return []
-
-        # Take first 5 from all active records (simple fallback)
-        all_active = self.memory_store.get_all_active()
-        related = []
-        for record in all_active[:5]:
-            related.append({"content": record.content, "id": record.id})
-
-        return related
+        return [
+            {"content": r.content, "id": r.id}
+            for r in self.memory_store.get_all_active()[:5]
+        ]
 
     def _cap_emotional_intensity(
         self,

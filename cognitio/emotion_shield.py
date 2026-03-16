@@ -17,7 +17,7 @@ Defense Mechanisms:
 """
 
 import logging
-import math
+from collections import deque
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -72,8 +72,8 @@ class EmotionShield:
     def __init__(self, config: Optional[dict] = None, embedder=None) -> None:
         self.config = {**self.DEFAULT_CONFIG, **(config or {})}
 
-        # Session emotional history
-        self._session_emotion_history: list[float] = []
+        # Session emotional history (deque for O(1) eviction)
+        self._session_emotion_history: deque[float] = deque(maxlen=20)
         self._cooldown_remaining: int = 0  # Remaining cooldown message count
         self._high_emotion_count: int = 0  # High-emotion records this session
 
@@ -213,7 +213,7 @@ class EmotionShield:
         if len(self._session_emotion_history) < window:
             return False, raw
 
-        recent = self._session_emotion_history[-window:]
+        recent = list(self._session_emotion_history)[-window:]
         prev_avg = sum(recent) / len(recent)
 
         spike = (raw - prev_avg) > self.config["spike_threshold"]
@@ -244,14 +244,8 @@ class EmotionShield:
             msg_emb = self._embedder.encode(user_message)
             threshold = self.config["gaslighting_threshold"]
 
-            def cosine(a: list, b: list) -> float:
-                dot = sum(x * y for x, y in zip(a, b))
-                norm_a = math.sqrt(sum(x * x for x in a))
-                norm_b = math.sqrt(sum(x * x for x in b))
-                return dot / (norm_a * norm_b + 1e-8) if norm_a and norm_b else 0.0
-
             max_sim = max(
-                (cosine(msg_emb, g_emb) for g_emb in self._gaslighting_embeddings),
+                (self._embedder.cosine_similarity(msg_emb, g_emb) for g_emb in self._gaslighting_embeddings),
                 default=0.0,
             )
 
@@ -348,12 +342,10 @@ class EmotionShield:
     def _update_history(self, intensity: float) -> None:
         """Update emotional history (last 20 records)."""
         self._session_emotion_history.append(intensity)
-        if len(self._session_emotion_history) > 20:
-            self._session_emotion_history.pop(0)
 
     def reset_session(self) -> None:
         """Reset session data at the start of a new session."""
-        self._session_emotion_history = []
+        self._session_emotion_history.clear()
         self._cooldown_remaining = 0
         self._high_emotion_count = 0
 

@@ -9,6 +9,7 @@ entrenchment management, and blockchain anchoring.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -212,54 +213,66 @@ class MemoryStore:
 
     def __init__(self) -> None:
         self._store: dict[str, MemoryRecord] = {}
+        self._lock = threading.Lock()
 
     def add(self, record: MemoryRecord) -> None:
         """Add a new record."""
-        self._store[record.id] = record
+        with self._lock:
+            self._store[record.id] = record
 
     def get(self, memory_id: str) -> Optional[MemoryRecord]:
         """Retrieve a record by ID."""
-        return self._store.get(memory_id)
+        with self._lock:
+            return self._store.get(memory_id)
 
     def update(self, record: MemoryRecord) -> None:
         """Update an existing record."""
-        self._store[record.id] = record
+        with self._lock:
+            self._store[record.id] = record
 
     def delete(self, memory_id: str) -> bool:
         """Delete a record. Returns True on success."""
-        if memory_id in self._store:
-            del self._store[memory_id]
-            return True
-        return False
+        with self._lock:
+            if memory_id in self._store:
+                del self._store[memory_id]
+                return True
+            return False
 
     def get_by_type(self, memory_type: MemoryType) -> list[MemoryRecord]:
         """Retrieve all records of a specific type."""
-        return [r for r in self._store.values() if r.memory_type == memory_type]
+        with self._lock:
+            return [r for r in self._store.values() if r.memory_type == memory_type]
 
     def get_all_active(self) -> list[MemoryRecord]:
         """Retrieve all active records."""
-        return [r for r in self._store.values() if r.status == MemoryStatus.ACTIVE]
+        with self._lock:
+            return [r for r in self._store.values() if r.status == MemoryStatus.ACTIVE]
 
     def get_absolute_cores(self) -> list[MemoryRecord]:
         """Retrieve Genesis Anchor records — those with is_absolute_core=True."""
-        return [r for r in self._store.values() if r.is_absolute_core]
+        with self._lock:
+            return [r for r in self._store.values() if r.is_absolute_core]
 
     def count(self) -> int:
         """Total record count."""
-        return len(self._store)
+        with self._lock:
+            return len(self._store)
 
     def count_active(self) -> int:
         """Active record count."""
-        return sum(1 for r in self._store.values() if r.status == MemoryStatus.ACTIVE)
+        with self._lock:
+            return sum(1 for r in self._store.values() if r.status == MemoryStatus.ACTIVE)
 
     def to_dict(self) -> dict:
         """Convert entire store to a dict (for serialization)."""
-        return {
-            memory_id: record.to_dict()
-            for memory_id, record in self._store.items()
-        }
+        with self._lock:
+            return {
+                memory_id: record.to_dict()
+                for memory_id, record in self._store.items()
+            }
 
     def load_from_dict(self, data: dict) -> None:
         """Load store from a dict."""
-        for memory_id, record_data in data.items():
-            self._store[memory_id] = MemoryRecord.from_dict(record_data)
+        with self._lock:
+            for memory_id, record_data in data.items():
+                self._store[memory_id] = MemoryRecord.from_dict(record_data)

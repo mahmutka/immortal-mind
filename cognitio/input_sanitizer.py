@@ -64,15 +64,24 @@ def sanitize_input(text: str) -> str:
     if not text:
         return text
 
-    # Step 1: Normalize to catch Unicode-obfuscated delimiters
-    # We normalize a copy for detection but operate on original text
+    # Step 1: Normalize to catch Unicode-obfuscated delimiters.
+    # We strip tokens from the normalized form so that Unicode-obfuscated
+    # variants (e.g. full-width ＜|system|＞) are also caught.
     normalized = _normalize_content(text)
 
-    # Step 2: Strip delimiter tokens (case-insensitive via normalized form)
+    # Step 2: Strip delimiter tokens from BOTH normalized and original forms.
     result = text
     for token in _DELIMITER_TOKENS:
-        # Replace in both original and normalized forms
-        result = re.sub(re.escape(token), "", result, flags=re.IGNORECASE)
+        token_lower = token.lower()
+        # Remove from normalized to detect obfuscated variants
+        if token_lower in normalized:
+            # Token found in normalized form — strip from original too
+            result = re.sub(re.escape(token), "", result, flags=re.IGNORECASE)
+            # Also remove the normalized version (catches Unicode-obfuscated tokens)
+            normalized = normalized.replace(token_lower, "")
+        else:
+            # Still try direct removal on original text
+            result = re.sub(re.escape(token), "", result, flags=re.IGNORECASE)
 
     # Step 3: Neutralize role prefixes — remove the colon
     # "system: do X" → "system do X" (no longer parsed as role instruction)

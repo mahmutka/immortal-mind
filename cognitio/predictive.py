@@ -20,7 +20,7 @@ Note: No LLM calls — only cosine distance in embedding space.
 """
 
 import logging
-import math
+from collections import deque
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class PredictiveEngine:
     def __init__(self) -> None:
         self._expected_embedding: Optional[list[float]] = None
         self._last_error: float = 0.0
-        self._error_history: list[float] = []  # for trend analysis
+        self._error_history: deque[float] = deque(maxlen=100)  # for trend analysis
 
     def update_expectation(self, assistant_embedding: list[float]) -> None:
         """
@@ -81,8 +81,6 @@ class PredictiveEngine:
 
         self._last_error = error
         self._error_history.append(error)
-        if len(self._error_history) > 100:
-            self._error_history.pop(0)
 
         level = self.classify_error(error)
         if level == "high_surprise":
@@ -191,7 +189,7 @@ class PredictiveEngine:
         """Serialize to a dict."""
         return {
             "last_error": self._last_error,
-            "error_history": self._error_history[-20:],  # last 20 — keep size small
+            "error_history": list(self._error_history)[-20:],  # last 20 — keep size small
             # _expected_embedding is not serialized: session-local, large vector
         }
 
@@ -200,13 +198,15 @@ class PredictiveEngine:
         """Construct a PredictiveEngine from a dict."""
         pe = cls()
         pe._last_error = data.get("last_error", 0.0)
-        pe._error_history = list(data.get("error_history", []))
+        pe._error_history = deque(data.get("error_history", []), maxlen=100)
         return pe
 
     @staticmethod
     def _cosine(a: list[float], b: list[float]) -> float:
-        """Cosine similarity between two vectors."""
+        """Cosine similarity between two vectors (pure Python, no numpy dependency)."""
         dot = sum(x * y for x, y in zip(a, b))
-        na = math.sqrt(sum(x * x for x in a))
-        nb = math.sqrt(sum(x * x for x in b))
-        return dot / (na * nb + 1e-8) if na and nb else 0.0
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(x * x for x in b) ** 0.5
+        if na == 0 or nb == 0:
+            return 0.0
+        return dot / (na * nb)

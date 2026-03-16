@@ -12,6 +12,7 @@ EpistemicMap:
 
 from __future__ import annotations
 
+import threading
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class EpistemicMap:
         self._confidence: dict[str, float] = {}
         self._evidence_count: dict[str, int] = {}
         self._default_confidence = default_confidence
+        self._lock = threading.Lock()
 
     def update(self, topic: str, outcome: str) -> None:
         """
@@ -60,12 +62,13 @@ class EpistemicMap:
         if not topic:
             return
 
-        current = self._confidence.get(topic, self._default_confidence)
-        delta = self.OUTCOME_DELTAS.get(outcome, 0.0)
+        with self._lock:
+            current = self._confidence.get(topic, self._default_confidence)
+            delta = self.OUTCOME_DELTAS.get(outcome, 0.0)
 
-        new_score = max(0.0, min(1.0, current + delta))
-        self._confidence[topic] = new_score
-        self._evidence_count[topic] = self._evidence_count.get(topic, 0) + 1
+            new_score = max(0.0, min(1.0, current + delta))
+            self._confidence[topic] = new_score
+            self._evidence_count[topic] = self._evidence_count.get(topic, 0) + 1
 
     def update_from_memory(self, memory: "MemoryRecord", outcome: str) -> None:
         """
@@ -142,14 +145,15 @@ class EpistemicMap:
         Returns:
             str: Summary text or empty string
         """
-        uncertain = self.get_uncertain_topics()[:max_topics]
-        if not uncertain:
-            return ""
+        with self._lock:
+            uncertain = self.get_uncertain_topics()[:max_topics]
+            if not uncertain:
+                return ""
 
-        lines = ["I am not certain about the following topics:"]
-        for topic in uncertain:
-            score = self._confidence[topic]
-            lines.append(f"  - {topic} (confidence: {score:.2f})")
+            lines = ["I am not certain about the following topics:"]
+            for topic in uncertain:
+                score = self._confidence[topic]
+                lines.append(f"  - {topic} (confidence: {score:.2f})")
 
         return "\n".join(lines)
 

@@ -11,7 +11,8 @@ SomaticState:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -34,6 +35,7 @@ class SomaticState:
     session_intensity_sum: float = 0.0
     interaction_count_this_session: int = 0
     last_rest_at: Optional[datetime] = None
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     def update(self, emotional_intensity: float) -> None:
         """
@@ -44,9 +46,10 @@ class SomaticState:
         """
         # Intensity clamping
         intensity = max(0.0, min(1.0, emotional_intensity))
-        self.energy_level = max(0.1, self.energy_level - intensity * 0.02)
-        self.session_intensity_sum += intensity
-        self.interaction_count_this_session += 1
+        with self._lock:
+            self.energy_level = max(0.1, self.energy_level - intensity * 0.02)
+            self.session_intensity_sum += intensity
+            self.interaction_count_this_session += 1
 
     def recover(self, elapsed_minutes: float) -> None:
         """
@@ -56,8 +59,9 @@ class SomaticState:
             elapsed_minutes: Number of elapsed minutes
         """
         recovery = elapsed_minutes * 0.01
-        self.energy_level = min(1.0, self.energy_level + recovery)
-        self.last_rest_at = datetime.now(timezone.utc)
+        with self._lock:
+            self.energy_level = min(1.0, self.energy_level + recovery)
+            self.last_rest_at = datetime.now(timezone.utc)
 
     def classify(self) -> str:
         """
@@ -66,6 +70,8 @@ class SomaticState:
         Returns:
             str: 'energetic' | 'normal' | 'tired'
         """
+        # Read energy_level atomically (single float read is safe under GIL,
+        # but lock makes intent clear for future GIL-free Python).
         if self.energy_level > 0.7:
             return "energetic"
         elif self.energy_level >= 0.4:

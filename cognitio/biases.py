@@ -425,7 +425,7 @@ class BiasEngine:
         outcome = self.confirmation.evaluate_update(
             existing_entrenchment, new_strength, source_trust
         )
-        # Ambivalent outcomes do not change trust — neither accept nor reject
-        trust_outcome = outcome if outcome != "ambivalent" else "accepted"
-        self.halo.update_trust(entity_id, trust_outcome)
+        # Ambivalent outcomes do not change trust — skip the trust update entirely
+        if outcome != "ambivalent":
+            self.halo.update_trust(entity_id, outcome)
         return outcome
