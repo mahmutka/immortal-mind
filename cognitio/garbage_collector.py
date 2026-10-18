@@ -300,11 +300,7 @@ class GarbageCollector:
             self.vector_store.add(
                 memory.id,
                 memory.embedding,
-                {
-                    "memory_type": memory.memory_type.value,
-                    "entrenchment": memory.entrenchment,
-                    "emotional_intensity": memory.emotional_intensity,
-                },
+                memory.to_vector_metadata(),
             )
 
         # Remove from log

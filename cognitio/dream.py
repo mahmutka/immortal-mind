@@ -183,6 +183,11 @@ class DreamCycle:
                 if candidates_found >= _INSIGHT_MAX_PER_DREAM:
                     break
 
+                # Never connect memories across privacy scopes — the insight
+                # would carry one person's private content to another.
+                if mem_a.scope_key() != mem_b.scope_key():
+                    continue
+
                 pair_key = tuple(sorted([mem_a.id, mem_b.id]))
                 if pair_key in seen_pairs:
                     continue
@@ -197,6 +202,8 @@ class DreamCycle:
                         "mem_a_content": mem_a.content,
                         "mem_b_content": mem_b.content,
                         "similarity": sim,
+                        "owner_id": mem_a.owner_id,
+                        "visibility": mem_a.visibility.value,
                     })
                     candidates_found += 1
                     log.append(
@@ -275,7 +282,7 @@ class DreamCycle:
         return {int(n) for n in nums if 0 <= int(n) < total}
 
     def _commit_candidate(self, candidate: dict, engine) -> None:
-        from cognitio.memory import MemoryRecord, MemoryType, MemoryValence
+        from cognitio.memory import MemoryRecord, MemoryType, MemoryValence, MemoryVisibility
         insight_content = (
             f"[Dream Connection] An unexpected link was found between "
             f"'{candidate['mem_a_content'][:70]}' and "
@@ -291,6 +298,9 @@ class DreamCycle:
             emotional_valence=MemoryValence.NEUTRAL,
             source_type="llm_inferred",
             tags=["dream", "insight", "validated"],
+            owner_id=candidate.get("owner_id", ""),
+            # Candidates persisted before privacy scopes existed: fail closed
+            visibility=MemoryVisibility(candidate.get("visibility", "private")),
         )
         engine.memory_store.add(insight)
         if insight.embedding is None:
@@ -299,15 +309,7 @@ class DreamCycle:
             engine.vector_store.add(
                 insight.id,
                 insight.embedding,
-                {
-                    "memory_type": insight.memory_type.value,
-                    "emotional_intensity": insight.emotional_intensity,
-                    "emotional_valence": insight.emotional_valence.value,
-                    "entrenchment": insight.entrenchment,
-                    "is_anchor": insight.is_anchor,
-                    "tags": ",".join(insight.tags),
-                    "created_at": insight.created_at.isoformat(),
-                },
+                insight.to_vector_metadata(),
             )
         except Exception as e:
             logger.debug("Insight could not be added to VectorStore: %s", e)

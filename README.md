@@ -47,6 +47,16 @@ Every user has full control over their own AI:
 
 **On-chain:** The freeze can also be reversed on-chain via the `unfreezeIdentity()` function.
 
+### Shared Mind — Web (v1.5)
+The web interface runs **one mind that talks with everyone and remembers everyone** — but never tells one person what another said in private.
+
+- **Accounts:** visitors register with a username + password (scrypt-hashed, lockout after 5 failed logins).
+- **Private by default:** every memory records who said it (`owner_id`) and its `visibility`. While talking with someone, the mind only recalls public memories and that person's own private memories. A visitor can turn on **🌍 Share publicly** to make what they say shareable.
+- **No cross-person leaks:** short-term context, summaries, contradiction notes, dream insights, the self-narrative and topic confidence are all kept within privacy scopes.
+- **One engine:** a single shared engine serves every browser session (no concurrent-write corruption in `data/`).
+- **Limits:** `IMP_DAILY_MESSAGE_LIMIT` per person, `IMP_GLOBAL_DAILY_LIMIT` for the whole site (caps the LLM bill).
+- **Admins only:** reset / freeze / delete-all are shown only to usernames in `IMP_ADMIN_USERS`. Every user can delete their own data and account.
+
 ## Opacity Principle
 
 **The AI's inner world cannot be viewed directly.**
@@ -123,7 +133,7 @@ IMP_ADMIN_KEY_HASH=sha256_hex_of_admin_passphrase
 | Smart Contract | Solidity 0.8.x |
 | Persistent Storage | Arweave (+ IPFS fallback) |
 | Frontend | Streamlit |
-| Tests | pytest (136 tests, 100% passing) |
+| Tests | pytest (163 tests, 100% passing) |
 
 ## Architecture
 

@@ -97,6 +97,13 @@ class WorkingMemory:
                 CREATE INDEX IF NOT EXISTS idx_pending_status
                     ON pending_memories(status);
             """)
+            # Shared-mind privacy columns (migration for older databases)
+            for table in ("interactions", "pending_memories"):
+                cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+                if "owner_id" not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN owner_id TEXT DEFAULT ''")
+                if "visibility" not in cols:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN visibility TEXT DEFAULT 'public'")
         logger.debug("WorkingMemory tables ready")
 
     def add_interaction(
@@ -104,6 +111,8 @@ class WorkingMemory:
         role: str,
         content: str,
         emotional_tone: float = 0.0,
+        owner_id: str = "",
+        visibility: str = "public",
     ) -> str:
         """
         Save a single message.
@@ -114,6 +123,9 @@ class WorkingMemory:
             role: Message owner ('user' or 'assistant')
             content: Message content
             emotional_tone: Emotional tone (-1.0 to 1.0)
+            owner_id: Person the conversation is with ("" = single-user mode)
+            visibility: 'private' or 'public' — inherited by the memories
+                consolidated from this message
 
         Returns:
             str: Generated interaction ID
@@ -124,9 +136,11 @@ class WorkingMemory:
         with self._get_connection() as conn:
             conn.execute(
                 """INSERT INTO interactions
-                   (id, session_id, timestamp, role, content, emotional_tone)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (interaction_id, self._session_id, now, role, content, emotional_tone),
+                   (id, session_id, timestamp, role, content, emotional_tone,
+                    owner_id, visibility)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (interaction_id, self._session_id, now, role, content, emotional_tone,
+                 owner_id, visibility),
             )
 
         if role == "user":
@@ -134,20 +148,24 @@ class WorkingMemory:
 
         return interaction_id
 
-    def get_current_session(self) -> list[dict]:
+    def get_current_session(self, owner_id: Optional[str] = None) -> list[dict]:
         """
         Retrieve all messages of the current session.
+
+        Parameters:
+            owner_id: Only messages of this person's conversation
+                (None = all messages, single-user mode)
 
         Returns:
             list[dict]: Message list in chronological order
         """
+        query = "SELECT * FROM interactions WHERE session_id = ?"
+        params: list = [self._session_id]
+        if owner_id is not None:
+            query += " AND owner_id = ?"
+            params.append(owner_id)
         with self._get_connection() as conn:
-            rows = conn.execute(
-                """SELECT * FROM interactions
-                   WHERE session_id = ?
-                   ORDER BY timestamp ASC""",
-                (self._session_id,),
-            ).fetchall()
+            rows = conn.execute(query + " ORDER BY timestamp ASC", params).fetchall()
 
         return [dict(row) for row in rows]
 
@@ -222,8 +240,20 @@ class WorkingMemory:
         interactions = [dict(row) for row in rows]
         interaction_ids = [r["id"] for r in interactions]
 
-        # Generate summaries
-        pending_memories = self._create_pending_memories(interactions, llm_summarizer)
+        # Summarize each privacy scope separately — one person's conversation
+        # (or their private vs. public messages) must never be merged into a
+        # single memory with another's.
+        groups: dict[tuple[str, str], list[dict]] = {}
+        for row in interactions:
+            key = (row.get("owner_id") or "", row.get("visibility") or "public")
+            groups.setdefault(key, []).append(row)
+
+        pending_memories = []
+        for (owner_id, visibility), group in groups.items():
+            for pm in self._create_pending_memories(group, llm_summarizer):
+                pm["owner_id"] = owner_id
+                pm["visibility"] = visibility
+                pending_memories.append(pm)
 
         # Write to pending_memories
         now = datetime.now(timezone.utc).isoformat()
@@ -232,8 +262,9 @@ class WorkingMemory:
                 conn.execute(
                     """INSERT INTO pending_memories
                        (id, session_id, created_at, summary, memory_type,
-                        emotional_intensity, emotional_valence, tags, source_type, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                        emotional_intensity, emotional_valence, tags, source_type, status,
+                        owner_id, visibility)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
                     (
                         pm["id"],
                         self._session_id,
@@ -244,6 +275,8 @@ class WorkingMemory:
                         pm["emotional_valence"],
                         json.dumps(pm["tags"]),
                         pm["source_type"],
+                        pm["owner_id"],
+                        pm["visibility"],
                     ),
                 )
 
@@ -284,9 +317,16 @@ class WorkingMemory:
         if not interactions:
             return []
 
-        # Concatenate conversation text
+        # Concatenate conversation text — name the speaker so the summary
+        # records who said it (the mind talks with many people)
+        def _speaker(i: dict) -> str:
+            label = i["role"].upper()
+            if i["role"] == "user" and i.get("owner_id"):
+                label += f" ({i['owner_id']})"
+            return label
+
         conversation_text = "\n".join([
-            f"{i['role'].upper()}: {i['content']}"
+            f"{_speaker(i)}: {i['content']}"
             for i in interactions
         ])
 
@@ -359,7 +399,7 @@ class WorkingMemory:
         logger.debug(f"flush_to_long_term: transferring {len(pending)} pending memories")
         return pending
 
-    def get_context_window(self, max_chars: int = 8000) -> str:
+    def get_context_window(self, max_chars: int = 8000, owner_id: Optional[str] = None) -> str:
         """
         Build the short-term context text to pass to the LLM.
 
@@ -367,12 +407,13 @@ class WorkingMemory:
 
         Parameters:
             max_chars: Maximum character count
+            owner_id: Only this person's conversation (None = everything)
 
         Returns:
             str: Context text
         """
         # Get recent messages (at most 20)
-        recent = self.get_current_session()[-20:]
+        recent = self.get_current_session(owner_id=owner_id)[-20:]
 
         lines = []
         for msg in recent:
@@ -418,6 +459,20 @@ class WorkingMemory:
         total = pm_deleted + int_deleted
         logger.info(f"WorkingMemory cleanup: {total} records deleted (>{older_than_days} days)")
         return total
+
+    def delete_owner(self, owner_id: str) -> int:
+        """
+        Delete every interaction and pending memory of one person (GDPR).
+
+        Returns:
+            int: Number of rows deleted
+        """
+        if not owner_id:
+            return 0
+        with self._get_connection() as conn:
+            n = conn.execute("DELETE FROM interactions WHERE owner_id = ?", (owner_id,)).rowcount
+            n += conn.execute("DELETE FROM pending_memories WHERE owner_id = ?", (owner_id,)).rowcount
+        return n
 
     def clear_session(self) -> None:
         """

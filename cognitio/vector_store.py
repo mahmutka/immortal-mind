@@ -216,6 +216,18 @@ class VectorStore:
             logger.error(f"VectorStore.get_all_ids error: {e}")
             return []
 
+    def ids_missing_metadata(self, key: str) -> list[str]:
+        """Return IDs of records whose metadata lacks `key` (for migrations)."""
+        try:
+            result = self._collection.get(include=["metadatas"])
+            return [
+                mid for mid, meta in zip(result["ids"], result["metadatas"] or [])
+                if not meta or key not in meta
+            ]
+        except Exception as e:
+            logger.error(f"VectorStore.ids_missing_metadata error: {e}")
+            return []
+
     def clear(self) -> None:
         """
         Delete all records. Drop and recreate the collection.

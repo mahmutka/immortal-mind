@@ -33,6 +33,12 @@ class MemoryValence(str, Enum):
     NEUTRAL = "neutral"
 
 
+class MemoryVisibility(str, Enum):
+    """Who may recall a memory (shared-mind privacy)."""
+    PUBLIC = "public"    # Anyone the AI talks to may hear about it
+    PRIVATE = "private"  # Only recalled while talking with its owner
+
+
 class MemoryStatus(str, Enum):
     """Memory status."""
     ACTIVE = "active"
@@ -69,6 +75,9 @@ class MemoryRecord:
         last_accessed: Last access time
         tags: Tags for search and categorization
         status: Current status
+        owner_id: Who told the AI this ("" = the AI itself / system)
+        visibility: PUBLIC or PRIVATE — private memories are only recalled
+            while talking with their owner
     """
     content: str
     memory_type: MemoryType = MemoryType.SEMANTIC
@@ -109,6 +118,41 @@ class MemoryRecord:
     # New cognitive layer fields
     temporal_density: float = 0.0    # Interaction density at creation time
     is_ambivalent: bool = False       # At peace with contradiction? (Ambivalence tolerance)
+
+    # Shared-mind privacy
+    owner_id: str = ""
+    visibility: MemoryVisibility = MemoryVisibility.PUBLIC
+
+    def is_visible_to(self, viewer_id: Optional[str]) -> bool:
+        """
+        May this memory be recalled while talking with viewer_id?
+
+        viewer_id=None means single-user mode (no privacy filtering).
+        """
+        if viewer_id is None or self.visibility == MemoryVisibility.PUBLIC:
+            return True
+        return bool(self.owner_id) and self.owner_id == viewer_id
+
+    def scope_key(self) -> tuple[str, str]:
+        """Privacy scope: memories may only be merged within the same scope."""
+        if self.visibility == MemoryVisibility.PUBLIC:
+            return ("public", "")
+        return ("private", self.owner_id)
+
+    def to_vector_metadata(self) -> dict:
+        """Metadata stored alongside the embedding in the VectorStore."""
+        return {
+            "memory_type": self.memory_type.value,
+            "emotional_intensity": self.emotional_intensity,
+            "emotional_valence": self.emotional_valence.value,
+            "entrenchment": self.entrenchment,
+            "is_anchor": self.is_anchor,
+            "is_absolute_core": self.is_absolute_core,
+            "tags": ",".join(self.tags),
+            "created_at": self.created_at.isoformat(),
+            "owner_id": self.owner_id,
+            "visibility": self.visibility.value,
+        }
 
     def reinforce(self, delta: float = 0.08) -> None:
         """
@@ -158,6 +202,8 @@ class MemoryRecord:
             "status": self.status.value,
             "temporal_density": self.temporal_density,
             "is_ambivalent": self.is_ambivalent,
+            "owner_id": self.owner_id,
+            "visibility": self.visibility.value,
             "created_at": self.created_at.isoformat(),
             "last_reinforced": self.last_reinforced.isoformat(),
             "last_accessed": self.last_accessed.isoformat(),
@@ -191,6 +237,12 @@ class MemoryRecord:
             record.status = MemoryStatus.ACTIVE
         record.temporal_density = data.get("temporal_density", 0.0)
         record.is_ambivalent = data.get("is_ambivalent", False)
+        record.owner_id = data.get("owner_id", "")
+        try:
+            record.visibility = MemoryVisibility(data.get("visibility", "public"))
+        except ValueError:
+            # Unknown value → fail closed
+            record.visibility = MemoryVisibility.PRIVATE
 
         if "created_at" in data:
             record.created_at = datetime.fromisoformat(data["created_at"])

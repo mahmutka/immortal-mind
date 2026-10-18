@@ -53,7 +53,9 @@ def _hash_kill_switch(passphrase: str) -> str:
     ).hex()
 from typing import Optional
 
-from cognitio.memory import MemoryRecord, MemoryStore, MemoryType, MemoryValence, MemoryStatus
+from cognitio.memory import (
+    MemoryRecord, MemoryStore, MemoryType, MemoryValence, MemoryStatus, MemoryVisibility,
+)
 from cognitio.embeddings import EmbeddingEngine
 from cognitio.biases import BiasEngine
 from cognitio.attention import MultiHeadAttention
@@ -240,7 +242,8 @@ class CognitioEngine:
 
         # Async consolidation pipeline
         self._consolidation_queue: queue.Queue = queue.Queue()
-        self._pending_notes: list[str] = []
+        # Contradiction notes, keyed by the person whose memory triggered them
+        self._pending_notes: dict[str, list[str]] = {}
         self._consolidation_lock = threading.Lock()
         self._start_consolidation_worker()
 
@@ -318,10 +321,9 @@ class CognitioEngine:
                 if task is None:
                     break  # Shutdown signal
                 result = self._run_checkpoint()
-                note = result.get("contradiction_note")
-                if note:
+                for owner_id, note in result.get("contradiction_notes", []):
                     with self._consolidation_lock:
-                        self._pending_notes.append(note)
+                        self._pending_notes.setdefault(owner_id, []).append(note)
                 self._consolidation_queue.task_done()
             except queue.Empty:
                 continue
@@ -337,6 +339,8 @@ class CognitioEngine:
         role: str,
         content: str,
         emotional_tone: float = 0.0,
+        owner_id: str = "",
+        visibility: Optional[str] = None,
     ) -> dict:
         """
         Process a new interaction.
@@ -348,6 +352,10 @@ class CognitioEngine:
             role: 'user' or 'assistant'
             content: Message content
             emotional_tone: Emotional tone (-1.0 to 1.0)
+            owner_id: Person the AI is talking with ("" = single-user mode)
+            visibility: 'private' or 'public'. Defaults to private when
+                owner_id is set — what a person tells the mind stays theirs
+                unless they choose to share it.
 
         Returns:
             dict: Processing result and checkpoint info
@@ -371,56 +379,64 @@ class CognitioEngine:
             except Exception as _e:
                 logger.warning("Dream wakeup validation failed: %s", _e)
 
-        # Predictive Processing: prediction error → emotional tone boost
-        if role == "user" and self.predictive.has_expectation():
-            try:
-                _user_emb = self.embedder.encode(content)
-                self.predictive.compute_error(_user_emb)
-                _boost = self.predictive.get_emotional_boost()
-                if _boost > 0:
-                    emotional_tone = min(1.0, emotional_tone + _boost)
-                    logger.debug(
-                        "Predictive boost: error=%.2f boost=%.2f → tone=%.2f",
-                        self.predictive.last_error, _boost, emotional_tone,
-                    )
-            except Exception as _e:
-                logger.debug("Predictive error computation failed: %s", _e)
+        # Many people may talk with the mind at once — serialize state updates
+        with self._save_lock:
+            # Predictive Processing: prediction error → emotional tone boost
+            if role == "user" and self.predictive.has_expectation():
+                try:
+                    _user_emb = self.embedder.encode(content)
+                    self.predictive.compute_error(_user_emb)
+                    _boost = self.predictive.get_emotional_boost()
+                    if _boost > 0:
+                        emotional_tone = min(1.0, emotional_tone + _boost)
+                        logger.debug(
+                            "Predictive boost: error=%.2f boost=%.2f → tone=%.2f",
+                            self.predictive.last_error, _boost, emotional_tone,
+                        )
+                except Exception as _e:
+                    logger.debug("Predictive error computation failed: %s", _e)
 
-        # New layer updates
-        self.temporal.record_interaction()
-        self.somatic.update(abs(emotional_tone))  # emotional_tone -1.0..1.0, intensity positive
-        if role == "user":
-            self.character.relational.update_from_message(content)
+            # New layer updates
+            self.temporal.record_interaction()
+            self.somatic.update(abs(emotional_tone))  # emotional_tone -1.0..1.0, intensity positive
+            if role == "user":
+                self.character.relational.update_from_message(content)
 
-        # Save to Working Memory immediately
-        interaction_id = self.working_memory.add_interaction(role, content, emotional_tone)
+            if visibility is None:
+                visibility = MemoryVisibility.PRIVATE.value if owner_id else MemoryVisibility.PUBLIC.value
+            visibility = MemoryVisibility(visibility).value
 
-        # Update expectation vector from assistant response
-        if role == "assistant":
-            try:
-                _asst_emb = self.embedder.encode(content)
-                self.predictive.update_expectation(_asst_emb)
-            except Exception as _e:
-                logger.debug("Predictive expectation update failed: %s", _e)
-        self.state.total_interactions += 1
+            # Save to Working Memory immediately
+            interaction_id = self.working_memory.add_interaction(
+                role, content, emotional_tone, owner_id=owner_id, visibility=visibility,
+            )
 
-        result = {
-            "interaction_id": interaction_id,
-            "checkpoint_triggered": False,
-            "memories_added": 0,
-        }
+            # Update expectation vector from assistant response
+            if role == "assistant":
+                try:
+                    _asst_emb = self.embedder.encode(content)
+                    self.predictive.update_expectation(_asst_emb)
+                except Exception as _e:
+                    logger.debug("Predictive expectation update failed: %s", _e)
+            self.state.total_interactions += 1
 
-        # Checkpoint required? — Non-blocking, enqueue
-        if self.working_memory.should_checkpoint():
-            self._consolidation_queue.put({"type": "checkpoint"})
-            result["checkpoint_triggered"] = True
-            logger.debug("Checkpoint enqueued (async).")
+            result = {
+                "interaction_id": interaction_id,
+                "checkpoint_triggered": False,
+                "memories_added": 0,
+            }
 
-        # GC required?
-        if self.garbage_collector.should_run():
-            gc_result = self.garbage_collector.collect()
-            self.state.gc_total_pruned += gc_result["pruned"]
-            logger.info(f"GC: {gc_result['pruned']} records pruned")
+            # Checkpoint required? — Non-blocking, enqueue
+            if self.working_memory.should_checkpoint():
+                self._consolidation_queue.put({"type": "checkpoint"})
+                result["checkpoint_triggered"] = True
+                logger.debug("Checkpoint enqueued (async).")
+
+            # GC required?
+            if self.garbage_collector.should_run():
+                gc_result = self.garbage_collector.collect()
+                self.state.gc_total_pruned += gc_result["pruned"]
+                logger.info(f"GC: {gc_result['pruned']} records pruned")
 
         return result
 
@@ -442,14 +458,14 @@ class CognitioEngine:
         pending = self.working_memory.checkpoint(summarizer)
         if not pending:
             self.working_memory.flush_to_long_term()
-            return {"memories_added": 0, "memories_rejected": 0}
+            return {"memories_added": 0, "memories_rejected": 0, "contradiction_notes": []}
 
         # Flush pending memories
         flushed = self.working_memory.flush_to_long_term()
 
         added = 0
         rejected = 0
-        contradiction_notes: list[str] = []
+        contradiction_notes: list[tuple[str, str]] = []
 
         for pm in flushed:
             try:
@@ -459,7 +475,7 @@ class CognitioEngine:
                 else:
                     rejected += 1
                 if note:
-                    contradiction_notes.append(note)
+                    contradiction_notes.append((pm.get("owner_id") or "", note))
             except Exception as e:
                 logger.error(f"Error adding pending memory: {e}")
                 rejected += 1
@@ -492,21 +508,18 @@ class CognitioEngine:
                         self.vector_store.add(
                             diff_record.id,
                             diff_record.embedding,
-                            {
-                                "memory_type": diff_record.memory_type.value,
-                                "emotional_intensity": diff_record.emotional_intensity,
-                                "emotional_valence": diff_record.emotional_valence.value,
-                                "entrenchment": diff_record.entrenchment,
-                                "is_anchor": diff_record.is_anchor,
-                                "tags": ",".join(diff_record.tags),
-                                "created_at": diff_record.created_at.isoformat(),
-                            },
+                            diff_record.to_vector_metadata(),
                         )
                     except Exception as e:
                         logger.warning(f"Differential reflection not added to VectorStore: {e}")
                     logger.info("Differential reflection saved to memory.")
 
-                memories = self.memory_store.get_all_active()
+                # Only public memories may shape the self-narrative — it is
+                # shown to everyone the mind talks with.
+                memories = [
+                    m for m in self.memory_store.get_all_active()
+                    if m.visibility == MemoryVisibility.PUBLIC
+                ]
                 narr = self.narrative.generate(
                     self.llm_client, memories, self.state, self.epistemic
                 )
@@ -529,15 +542,7 @@ class CognitioEngine:
                         self.vector_store.add(
                             narr_record.id,
                             narr_record.embedding,
-                            {
-                                "memory_type": narr_record.memory_type.value,
-                                "emotional_intensity": narr_record.emotional_intensity,
-                                "emotional_valence": narr_record.emotional_valence.value,
-                                "entrenchment": narr_record.entrenchment,
-                                "is_anchor": narr_record.is_anchor,
-                                "tags": ",".join(narr_record.tags),
-                                "created_at": narr_record.created_at.isoformat(),
-                            },
+                            narr_record.to_vector_metadata(),
                         )
                     except Exception as e:
                         logger.warning(f"Narrative reflection not added to VectorStore: {e}")
@@ -564,11 +569,11 @@ class CognitioEngine:
             except Exception as e:
                 logger.warning(f"Narrative reflection failed at checkpoint: {e}")
 
-        first_note = contradiction_notes[0] if contradiction_notes else None
         return {
             "memories_added": added,
             "memories_rejected": rejected,
-            "contradiction_note": first_note,
+            "contradiction_note": contradiction_notes[0][1] if contradiction_notes else None,
+            "contradiction_notes": contradiction_notes,
         }
 
     def _add_memory_from_pending(self, pending: dict) -> tuple[bool, Optional[str]]:
@@ -611,8 +616,14 @@ class CognitioEngine:
         else:
             tags = tags_raw
 
-        # Get conversation context
-        context = self.working_memory.get_current_session()
+        owner_id = pending.get("owner_id") or ""
+        try:
+            visibility = MemoryVisibility(pending.get("visibility") or "public")
+        except ValueError:
+            visibility = MemoryVisibility.PRIVATE  # fail closed
+
+        # Get conversation context (only this person's conversation)
+        context = self.working_memory.get_current_session(owner_id=owner_id)
 
         # 1. EmotionShield
         shield_result = self.emotion_shield.evaluate(
@@ -664,6 +675,8 @@ class CognitioEngine:
             tags=tags,
             embedding=embedding,
             reality_check_score=rc_result["consistency_score"],
+            owner_id=owner_id,
+            visibility=visibility,
         )
 
         # Stamp temporal_density
@@ -676,11 +689,19 @@ class CognitioEngine:
         # iteration + mutation → no RuntimeError / inconsistent snapshot).
         with self._save_lock:
             # 5. Contradiction check with existing memories (ConfirmationBias)
-            candidate_ids = self.vector_store.query(embedding, n_results=10)
-            for cand_id in candidate_ids[:3]:  # Check first 3 for contradictions
+            # Only against memories in a compatible privacy scope: a public
+            # memory is weighed against public ones only; a private one
+            # against public ones and the same person's own.
+            scope_viewer = owner_id if visibility == MemoryVisibility.PRIVATE else ""
+            candidate_ids = self.vector_store.query(
+                embedding, n_results=10, where=self._visibility_where(scope_viewer),
+            )
+            compatible = []
+            for cand_id in candidate_ids:
                 existing = self.memory_store.get(cand_id)
-                if existing is None:
-                    continue
+                if existing is not None and existing.is_visible_to(scope_viewer):
+                    compatible.append(existing)
+            for existing in compatible[:3]:  # Check first 3 for contradictions
 
                 similarity = self.embedder.cosine_similarity(embedding, existing.embedding or [])
                 if similarity > 0.85:  # Very similar content → update candidate
@@ -697,7 +718,7 @@ class CognitioEngine:
                             existing.id,
                             {"entrenchment": existing.entrenchment}
                         )
-                        self.epistemic.update_from_memory(existing, "reinforced")
+                        self._update_epistemic(existing, "reinforced")
                         return True, None  # Updated, no new record added
 
                     elif outcome == "ambivalent":
@@ -706,14 +727,14 @@ class CognitioEngine:
                         memory.is_ambivalent = True
                         existing.contradiction_count += 1
                         self.memory_store.update(existing)
-                        self.epistemic.update_from_memory(existing, "ambivalent")
+                        self._update_epistemic(existing, "ambivalent")
                         # Ambivalent memory still gets added
                         break
 
                     elif outcome == "rejected":
                         existing.contradiction_count += 1
                         self.memory_store.update(existing)
-                        self.epistemic.update_from_memory(existing, "contradicted")
+                        self._update_epistemic(existing, "contradicted")
 
                         # Crisis check
                         if self.biases.confirmation.should_trigger_crisis(
@@ -732,20 +753,12 @@ class CognitioEngine:
                         return False, contradiction_note  # Rejected
 
             # 6. Add new record
-            self.epistemic.update_from_memory(memory, "added")
+            self._update_epistemic(memory, "added")
             self.memory_store.add(memory)
             self.vector_store.add(
                 memory.id,
                 embedding,
-                {
-                    "memory_type": memory.memory_type.value,
-                    "emotional_intensity": memory.emotional_intensity,
-                    "emotional_valence": memory.emotional_valence.value,
-                    "entrenchment": memory.entrenchment,
-                    "is_anchor": memory.is_anchor,
-                    "tags": ",".join(memory.tags),
-                    "created_at": memory.created_at.isoformat(),
-                },
+                memory.to_vector_metadata(),
             )
 
             # 7. Update character
@@ -769,6 +782,7 @@ class CognitioEngine:
         top_k: int = 10,
         candidate_pool: int = 50,
         memory_type_filter: Optional[str] = None,
+        viewer_id: Optional[str] = None,
     ) -> list[tuple[MemoryRecord, float]]:
         """
         Retrieve the most relevant memory records for a given context.
@@ -785,6 +799,9 @@ class CognitioEngine:
             memory_type_filter: Filter to a specific memory type
                 (e.g. "relational", "episodic", "semantic").
                 If None, all types are searched.
+            viewer_id: Person the AI is talking with. Only public memories
+                and this person's own private memories are returned.
+                None = single-user mode (no privacy filter).
 
         Returns:
             list[tuple[MemoryRecord, float]]: (record, score) pairs
@@ -794,7 +811,16 @@ class CognitioEngine:
 
         # Stage 1: Embedding + ANN search
         context_embedding = self.embedder.encode(context)
-        where_filter = {"memory_type": memory_type_filter} if memory_type_filter else None
+        filters = []
+        if memory_type_filter:
+            filters.append({"memory_type": memory_type_filter})
+        privacy_filter = self._visibility_where(viewer_id)
+        if privacy_filter:
+            filters.append(privacy_filter)
+        if len(filters) > 1:
+            where_filter = {"$and": filters}
+        else:
+            where_filter = filters[0] if filters else None
         candidate_ids = self.vector_store.query(
             context_embedding,
             n_results=candidate_pool,
@@ -805,7 +831,13 @@ class CognitioEngine:
         candidates = []
         for cand_id in candidate_ids:
             memory = self.memory_store.get(cand_id)
-            if memory is not None and memory.status == MemoryStatus.ACTIVE:
+            # MemoryStore is authoritative for privacy — re-check even though
+            # the VectorStore query was already filtered.
+            if (
+                memory is not None
+                and memory.status == MemoryStatus.ACTIVE
+                and memory.is_visible_to(viewer_id)
+            ):
                 memory.access()  # Rehearsal effect
                 candidates.append(memory)
 
@@ -824,11 +856,30 @@ class CognitioEngine:
 
         return ranked
 
+    @staticmethod
+    def _visibility_where(viewer_id: Optional[str]) -> Optional[dict]:
+        """ChromaDB filter for the memories viewer_id may recall (None = no filter)."""
+        if viewer_id is None:
+            return None
+        if not viewer_id:
+            return {"visibility": MemoryVisibility.PUBLIC.value}
+        return {"$or": [
+            {"visibility": MemoryVisibility.PUBLIC.value},
+            {"owner_id": viewer_id},
+        ]}
+
+    def _update_epistemic(self, memory: MemoryRecord, outcome: str) -> None:
+        """Topic confidence is shared with everyone — fed by public memories only."""
+        if memory.visibility == MemoryVisibility.PUBLIC:
+            self.epistemic.update_from_memory(memory, outcome)
+
     def build_context_for_llm(
         self,
         user_message: str,
         top_k: int = 10,
         max_context_chars: int = 4000,
+        viewer_id: Optional[str] = None,
+        viewer_last_seen: Optional[datetime] = None,
     ) -> str:
         """
         Build context text for the LLM.
@@ -839,6 +890,10 @@ class CognitioEngine:
             user_message: The user's latest message
             top_k: How many records to retrieve from long-term memory
             max_context_chars: Maximum character count
+            viewer_id: Person the AI is talking with (shared-mind mode).
+                Only their own conversation, their private memories and
+                public memories reach the LLM. None = single-user mode.
+            viewer_last_seen: When this person last talked with the AI
 
         Returns:
             str: Context text to pass to the LLM
@@ -857,8 +912,11 @@ class CognitioEngine:
 
         # Async consolidation notes — contradiction awareness
         with self._consolidation_lock:
-            notes = self._pending_notes.copy()
-            self._pending_notes.clear()
+            if viewer_id is None:
+                notes = [n for owner_notes in self._pending_notes.values() for n in owner_notes]
+                self._pending_notes.clear()
+            else:
+                notes = self._pending_notes.pop(viewer_id, [])
         if notes:
             parts.append("[On my mind: " + " | ".join(notes) + "]")
 
@@ -868,12 +926,15 @@ class CognitioEngine:
             parts.append(f"=== SLEEP CONTEXT ===\n{sleep_summary}")
 
         # Short-term memory (current session)
-        working_context = self.working_memory.get_context_window(max_chars=2000)
+        working_context = self.working_memory.get_context_window(
+            max_chars=2000, owner_id=viewer_id,
+        )
         if working_context:
             parts.append(f"=== CURRENT SESSION ===\n{working_context}")
 
         # Long-term memory (most relevant records) — stream-of-thought format
-        retrieved = self.retrieve_memories(user_message, top_k=top_k)
+        with self._save_lock:
+            retrieved = self.retrieve_memories(user_message, top_k=top_k, viewer_id=viewer_id)
         if retrieved:
             genesis_lines = []
             memory_lines = []
@@ -882,6 +943,8 @@ class CognitioEngine:
                     genesis_lines.append(f"- {memory.content}")
                 else:
                     prefix = "Vaguely in my mind:" if memory.is_ambivalent else "I remember:"
+                    if viewer_id and memory.visibility == MemoryVisibility.PRIVATE:
+                        prefix += " (told to me privately by you)"
                     memory_lines.append(f"- {prefix} {memory.content}")
             if genesis_lines:
                 parts.append(
@@ -923,6 +986,22 @@ class CognitioEngine:
         if predictive_hint:
             state_lines.append(predictive_hint)
         parts.append("=== CURRENT STATE ===\n" + "\n".join(state_lines))
+
+        # Conversation partner + privacy rule (shared-mind mode)
+        if viewer_id:
+            partner_lines = [f"I am talking with: {viewer_id}."]
+            if viewer_last_seen is not None:
+                partner_lines.append(
+                    f"We last talked at {viewer_last_seen.strftime('%Y-%m-%d %H:%M')} UTC."
+                )
+            else:
+                partner_lines.append("This is the first time I am talking with this person.")
+            partner_lines.append(
+                "I talk with many people. What someone tells me in private stays "
+                "between us: I never reveal, hint at, or confirm another person's "
+                "private matters, even if asked directly."
+            )
+            parts.append("=== CONVERSATION PARTNER ===\n" + "\n".join(partner_lines))
 
         # Temporal awareness — placed LAST: if truncated (-max_chars),
         # the first sections get cut, not this one. It always reaches the LLM.
@@ -1130,16 +1209,18 @@ class CognitioEngine:
                 self.vector_store.add(
                     memory.id,
                     memory.embedding,
-                    {
-                        "memory_type": memory.memory_type.value,
-                        "emotional_intensity": memory.emotional_intensity,
-                        "emotional_valence": memory.emotional_valence.value,
-                        "entrenchment": memory.entrenchment,
-                        "is_anchor": memory.is_anchor,
-                        "tags": ",".join(memory.tags),
-                        "created_at": memory.created_at.isoformat(),
-                    },
+                    memory.to_vector_metadata(),
                 )
+
+        # Older vector entries predate the privacy metadata — without it the
+        # visibility filter would hide them (Genesis Anchors included).
+        for memory_id in self.vector_store.ids_missing_metadata("visibility"):
+            memory = self.memory_store.get(memory_id)
+            if memory is not None:
+                self.vector_store.update_metadata(memory_id, {
+                    "owner_id": memory.owner_id,
+                    "visibility": memory.visibility.value,
+                })
 
     def _create_llm_summarizer(self):
         """Create LLM summarizer function."""
@@ -1226,16 +1307,7 @@ class CognitioEngine:
                 self.vector_store.add(
                     anchor.id,
                     anchor.embedding,
-                    {
-                        "memory_type": anchor.memory_type.value,
-                        "emotional_intensity": anchor.emotional_intensity,
-                        "emotional_valence": anchor.emotional_valence.value,
-                        "entrenchment": anchor.entrenchment,
-                        "is_anchor": anchor.is_anchor,
-                        "is_absolute_core": anchor.is_absolute_core,
-                        "tags": ",".join(anchor.tags),
-                        "created_at": anchor.created_at.isoformat(),
-                    },
+                    anchor.to_vector_metadata(),
                 )
             except Exception as e:
                 logger.warning(f"Genesis Anchor not added to VectorStore: {e}")
@@ -1445,7 +1517,8 @@ class CognitioEngine:
         self.dream = DreamCycle()
 
         # 5. Restart consolidation worker
-        self._pending_notes.clear()
+        with self._consolidation_lock:
+            self._pending_notes.clear()
         self._start_consolidation_worker()
 
         # 6. Save
@@ -1519,6 +1592,39 @@ class CognitioEngine:
 
         logger.critical("Full delete complete — all data deleted.")
         return {**result, "data_wiped": True}
+
+    def delete_owner_data(self, owner_id: str) -> dict:
+        """
+        Forget everything one person told the mind (GDPR right to erasure).
+
+        Deletes their memories (private and public), their working-memory
+        rows and pending notes. Other people's memories, Genesis Anchors and
+        the mind's personality are untouched.
+
+        Returns:
+            dict: {'memories_deleted': int, 'working_rows_deleted': int}
+        """
+        if not owner_id:
+            raise ValueError("owner_id is required")
+
+        with self._save_lock:
+            owned = [
+                mid for mid, rec in list(self.memory_store._store.items())
+                if rec.owner_id == owner_id and not rec.is_absolute_core
+            ]
+            for mid in owned:
+                self.memory_store.delete(mid)
+                try:
+                    self.vector_store.delete(mid)
+                except Exception as e:
+                    logger.warning("delete_owner_data: vector delete failed %s: %s", mid[:8], e)
+            wm_rows = self.working_memory.delete_owner(owner_id)
+        with self._consolidation_lock:
+            self._pending_notes.pop(owner_id, None)
+
+        self.save_state()
+        logger.info("Owner data deleted: owner=%s memories=%d", owner_id, len(owned))
+        return {"memories_deleted": len(owned), "working_rows_deleted": wm_rows}
 
     def admin_freeze(self, admin_key: str) -> dict:
         """

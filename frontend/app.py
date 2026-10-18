@@ -3,10 +3,14 @@ frontend/app.py
 
 Immortal Mind Protocol — Streamlit Web Interface
 
+One shared mind talks with every visitor. Visitors log in with a
+username + password; what each person tells the mind is private to them
+unless they turn on "Share publicly".
+
 Tabs:
     1. Chat          — Conversation with the AI (single window)
-    2. Blockchain    — On-chain log viewer
-    3. Resilience    — Provider status and fallback chain
+    2. Blockchain    — On-chain log viewer (admins only)
+    3. Resilience    — Provider status and fallback chain (admins only)
 
 NOTE: Memory and character tabs have been removed.
 The AI's inner world cannot be viewed directly.
@@ -38,177 +42,268 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────
-# SESSION STATE
+# SHARED MIND
 # ─────────────────────────────────────────────
+#
+# One mind talks with everyone. The engine is created once per server
+# process (st.cache_resource) and shared by every browser session —
+# separate engines would overwrite each other's files in data/.
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+@st.cache_resource(show_spinner="Waking up the mind...")
+def get_mind():
+    """Create the shared engine, LLM client and account store (once per process)."""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    from agent.accounts import AccountStore
+    from agent.llm_client import LLMClient
+    from agent.model_adapter import ModelAdapter
+    from cognitio.engine import CognitioEngine
+
+    provider = os.getenv("LLM_PROVIDER", "gemini")
+    data_dir = os.getenv("IMP_DATA_DIR", "data")
+    llm = LLMClient(provider=provider)
+    engine = CognitioEngine(
+        llm_client=llm,
+        config={
+            "reality_check_enabled": True,
+            "max_active_memories": _env_int("MAX_ACTIVE_MEMORIES", 10000),
+        },
+        data_dir=data_dir,
+    )
+    return {
+        "engine": engine,
+        "llm": llm,
+        "adapter": ModelAdapter(provider=provider),
+        "accounts": AccountStore(os.path.join(data_dir, "accounts.db")),
+    }
+
+
+def is_admin(username: str | None) -> bool:
+    admins = {
+        a.strip().lower() for a in os.getenv("IMP_ADMIN_USERS", "").split(",") if a.strip()
+    }
+    return bool(username) and username in admins
+
 
 def init_session_state():
-    if "engine" not in st.session_state:
-        st.session_state.engine = None
-    if "llm_client" not in st.session_state:
-        st.session_state.llm_client = None
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-    if "initialized" not in st.session_state:
-        st.session_state.initialized = False
-    if "confirm_reset" not in st.session_state:
-        st.session_state.confirm_reset = False
-    if "confirm_delete" not in st.session_state:
-        st.session_state.confirm_delete = False
-    if "model_adapter" not in st.session_state:
-        st.session_state.model_adapter = None
-
-
-def initialize_engine(provider: str = "gemini"):
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-
-        from agent.llm_client import LLMClient
-        from cognitio.engine import CognitioEngine
-
-        llm = LLMClient(provider=provider)
-        engine = CognitioEngine(
-            llm_client=llm,
-            config={
-                "reality_check_enabled": True,
-                "max_active_memories": int(os.getenv("MAX_ACTIVE_MEMORIES", "10000")),
-            },
-        )
-
-        from agent.model_adapter import ModelAdapter
-        st.session_state.llm_client = llm
-        st.session_state.engine = engine
-        st.session_state.model_adapter = ModelAdapter(provider=provider)
-        st.session_state.initialized = True
-        return True
-
-    except Exception as e:
-        st.error(f"Initialization error: {e}")
-        return False
+    defaults = {
+        "user": None,           # logged-in username (= memory owner_id)
+        "last_seen": None,      # when this person last talked with the mind
+        "messages": [],
+        "share_public": False,  # messages sent while on become public memories
+        "confirm_reset": False,
+        "confirm_delete": False,
+        "confirm_forget_me": False,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 # ─────────────────────────────────────────────
-# SIDEBAR — connection status only
+# LOGIN / REGISTER
 # ─────────────────────────────────────────────
 
-def render_sidebar():
+def render_login(accounts) -> None:
+    from agent.accounts import AccountError
+
+    st.title("🧠 Immortal Mind")
+    st.caption(
+        "One mind that talks with everyone and remembers everyone. "
+        "What you tell it stays between the two of you."
+    )
+
+    login_tab, register_tab = st.tabs(["Log in", "Create account"])
+
+    with login_tab:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Log in", use_container_width=True)
+        if submitted:
+            try:
+                user = accounts.authenticate(username, password)
+            except AccountError as e:
+                st.error(str(e))
+            else:
+                if user:
+                    _start_session(accounts, user)
+                    st.rerun()
+                else:
+                    st.error("Wrong username or password.")
+
+    with register_tab:
+        if os.getenv("IMP_REGISTRATION_OPEN", "true").lower() != "true":
+            st.info("New registrations are currently closed.")
+            return
+        max_accounts = _env_int("IMP_MAX_ACCOUNTS", 0)
+        if max_accounts and accounts.count_accounts() >= max_accounts:
+            st.info("The mind is not meeting new people right now. Please try again later.")
+            return
+        with st.form("register_form"):
+            username = st.text_input(
+                "Username", help="3-24 characters: lowercase letters, digits or _"
+            )
+            password = st.text_input("Password", type="password", help="At least 8 characters")
+            password2 = st.text_input("Password (again)", type="password")
+            submitted = st.form_submit_button("Create account", use_container_width=True)
+        if submitted:
+            if password != password2:
+                st.error("Passwords do not match.")
+            else:
+                try:
+                    user = accounts.register(username, password)
+                except AccountError as e:
+                    st.error(str(e))
+                else:
+                    _start_session(accounts, user)
+                    st.rerun()
+
+
+def _start_session(accounts, user: str) -> None:
+    st.session_state.user = user
+    st.session_state.last_seen = accounts.get_last_seen(user)
+    st.session_state.messages = []
+    st.session_state.share_public = False
+
+
+# ─────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────
+
+def render_sidebar(mind) -> None:
+    engine = mind["engine"]
+    accounts = mind["accounts"]
+    user = st.session_state.user
+
     with st.sidebar:
         st.title("🧠 Immortal Mind")
-        st.caption("Blockchain-Persistent AI Identity")
+        st.caption(f"Logged in as **{user}**")
 
-        st.divider()
+        daily_limit = _env_int("IMP_DAILY_MESSAGE_LIMIT", 50)
+        if daily_limit:
+            used = accounts.messages_today(user)
+            st.caption(f"Messages today: {used} / {daily_limit}")
 
-        provider = st.selectbox(
-            "LLM Provider",
-            ["groq", "gemini", "ollama"],
-            index=0,
-            help="Groq → Gemini → Ollama fallback chain",
+        st.toggle(
+            "🌍 Share publicly",
+            key="share_public",
+            help=(
+                "Off (default): what you say is private — the mind only recalls it "
+                "when talking with you. On: what you say while this is on may be "
+                "shared with anyone the mind talks with."
+            ),
         )
+        if st.session_state.share_public:
+            st.warning("Your next messages may be shared with everyone.")
 
-        if st.button("🚀 Start / Reconnect", use_container_width=True):
-            with st.spinner("Initializing..."):
-                if initialize_engine(provider):
-                    st.success("Connection established.")
-                    st.rerun()
+        if st.button("Log out", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
 
-        st.divider()
-
-        if st.session_state.initialized:
-            st.success("🟢 System active")
-        else:
-            st.info("Select a provider and click 'Start'.")
-
-        st.divider()
-
-        # ─── System Control (show only if initialized) ───
-        if st.session_state.get("initialized"):
-            engine = st.session_state.engine
-            st.markdown("**⚙️ System Control**")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("🔄 Reset", help="Reset memory and personality (Genesis preserved)"):
-                    st.session_state.confirm_reset = True
-            with col2:
-                if engine.state.is_frozen:
-                    if st.button("▶️ Activate", help="Activate the AI"):
-                        engine.user_unfreeze()
-                        st.rerun()
-                else:
-                    if st.button("⏸️ Freeze", help="Freeze the AI (memory preserved)"):
-                        engine.user_freeze()
-                        st.rerun()
-
-            # Soft reset confirmation
-            if st.session_state.get("confirm_reset"):
-                st.warning("⚠️ All memory and personality will be deleted!")
+        # Right to erasure — only this person's data
+        with st.expander("🗑️ Delete my data"):
+            st.caption(
+                "The mind forgets everything you told it and your account is deleted. "
+                "This cannot be undone."
+            )
+            if st.button("Delete my data and account"):
+                st.session_state.confirm_forget_me = True
+            if st.session_state.confirm_forget_me:
+                st.error("Are you sure?")
                 c1, c2 = st.columns(2)
-                if c1.button("✅ Confirm", key="confirm_reset_yes"):
-                    engine.soft_reset()
-                    st.session_state.messages = []
-                    st.session_state.confirm_reset = False
+                if c1.button("✅ Yes, delete", key="forget_me_yes"):
+                    engine.delete_owner_data(user)
+                    accounts.delete_account(user)
+                    for key in list(st.session_state.keys()):
+                        del st.session_state[key]
                     st.rerun()
-                if c2.button("❌ Cancel", key="confirm_reset_no"):
-                    st.session_state.confirm_reset = False
+                if c2.button("❌ Cancel", key="forget_me_no"):
+                    st.session_state.confirm_forget_me = False
                     st.rerun()
 
-            # Full delete — danger zone
-            with st.expander("⚠️ Danger Zone"):
-                if st.button("🗑️ Delete All Data (GDPR)", type="secondary"):
-                    st.session_state.confirm_delete = True
-                if st.session_state.get("confirm_delete"):
-                    st.error("This action **cannot be undone!**")
-                    if st.button("💀 Delete Permanently", type="primary"):
-                        engine.full_delete()
-                        st.session_state.clear()
-                        st.rerun()
-                    if st.button("Cancel"):
-                        st.session_state.confirm_delete = False
-                        st.rerun()
+        if is_admin(user):
+            render_admin_controls(engine)
 
-            st.divider()
-
-        st.caption("Immortal Mind Protocol v0.5")
+        st.divider()
+        st.caption("Immortal Mind Protocol v1.5")
         st.caption("The inner world can only be discovered through conversation.")
+
+
+def render_admin_controls(engine) -> None:
+    """Controls that affect the mind for everyone — admins only."""
+    st.divider()
+    st.markdown("**⚙️ Admin: System Control**")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Reset", help="Reset memory and personality (Genesis preserved)"):
+            st.session_state.confirm_reset = True
+    with col2:
+        if engine.state.is_frozen:
+            if st.button("▶️ Activate", help="Activate the AI"):
+                engine.user_unfreeze()
+                st.rerun()
+        else:
+            if st.button("⏸️ Freeze", help="Freeze the AI (memory preserved)"):
+                engine.user_freeze()
+                st.rerun()
+
+    # Soft reset confirmation
+    if st.session_state.get("confirm_reset"):
+        st.warning("⚠️ Everyone's memories and the personality will be deleted!")
+        c1, c2 = st.columns(2)
+        if c1.button("✅ Confirm", key="confirm_reset_yes"):
+            engine.soft_reset()
+            st.session_state.messages = []
+            st.session_state.confirm_reset = False
+            st.rerun()
+        if c2.button("❌ Cancel", key="confirm_reset_no"):
+            st.session_state.confirm_reset = False
+            st.rerun()
+
+    # Full delete — danger zone
+    with st.expander("⚠️ Danger Zone"):
+        if st.button("🗑️ Delete All Data (GDPR)", type="secondary"):
+            st.session_state.confirm_delete = True
+        if st.session_state.get("confirm_delete"):
+            st.error("This action **cannot be undone!** Restart the server afterwards.")
+            if st.button("💀 Delete Permanently", type="primary"):
+                engine.full_delete()
+                get_mind.clear()
+                st.session_state.clear()
+                st.rerun()
+            if st.button("Cancel"):
+                st.session_state.confirm_delete = False
+                st.rerun()
 
 
 # ─────────────────────────────────────────────
 # CHAT TAB
 # ─────────────────────────────────────────────
 
-def render_chat():
+def render_chat(mind) -> None:
     st.header("💬 Chat")
 
-    if not st.session_state.initialized:
-        st.warning("Initialize the system from the left panel.")
-        return
-
-    engine = st.session_state.engine
-    llm = st.session_state.llm_client
-
-    # Sleep / dream notification (only until the first message of this session)
-    if "sleep_shown" not in st.session_state:
-        st.session_state.sleep_shown = False
-
-    if not st.session_state.sleep_shown and engine is not None:
-        sleep_msg = engine.temporal.get_sleep_summary()
-        dream_msg = engine.dream.get_dream_summary()
-        if sleep_msg or dream_msg:
-            parts = []
-            if sleep_msg:
-                parts.append(sleep_msg)
-            if dream_msg:
-                parts.append(dream_msg)
-            st.info("🌙 " + " ".join(parts))
-        st.session_state.sleep_shown = True
+    engine = mind["engine"]
+    llm = mind["llm"]
+    adapter = mind["adapter"]
+    accounts = mind["accounts"]
+    user = st.session_state.user
 
     # Frozen warning
-    if engine is not None and engine.state.is_frozen:
-        st.warning(
-            "⏸️ The AI is currently frozen. "
-            "Click the '▶️ Activate' button in the sidebar."
-        )
-        st.stop()
+    if engine.state.is_frozen:
+        st.warning("⏸️ The mind is resting right now. Please come back later.")
+        return
 
     # Message history
     for msg in st.session_state.messages:
@@ -219,18 +314,35 @@ def render_chat():
     if prompt := st.chat_input("Type your message..."):
         from cognitio.input_sanitizer import sanitize_input
         prompt = sanitize_input(prompt)
+        if not prompt:
+            return
+
+        allowed, reason = accounts.consume_message(
+            user,
+            daily_limit=_env_int("IMP_DAILY_MESSAGE_LIMIT", 50),
+            global_daily_limit=_env_int("IMP_GLOBAL_DAILY_LIMIT", 2000),
+        )
+        if not allowed:
+            if reason == "user":
+                st.warning("You have reached today's message limit. See you tomorrow!")
+            else:
+                st.warning("The mind has talked a lot today and needs rest. Please come back tomorrow.")
+            return
+
+        visibility = "public" if st.session_state.share_public else "private"
 
         with st.chat_message("user"):
             st.write(prompt)
 
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        engine.process_interaction("user", prompt)
+        engine.process_interaction("user", prompt, owner_id=user, visibility=visibility)
 
-        context = engine.build_context_for_llm(prompt)
+        context = engine.build_context_for_llm(
+            prompt, viewer_id=user, viewer_last_seen=st.session_state.last_seen,
+        )
 
         # Somatic and relational hints
-        adapter = st.session_state.model_adapter
         somatic_mods = engine.somatic.get_modifiers()
         relational_hints = engine.character.relational.get_style_hints()
 
@@ -251,7 +363,10 @@ def render_chat():
                     )
                     st.write(response)
 
-                    engine.process_interaction("assistant", response)
+                    engine.process_interaction(
+                        "assistant", response, owner_id=user, visibility=visibility,
+                    )
+                    accounts.touch(user)
                     # Save session data to disk — no loss if tab closes
                     try:
                         engine.save_state()
@@ -263,7 +378,8 @@ def render_chat():
                     })
 
                 except Exception as e:
-                    st.error(f"LLM error: {e}")
+                    logger.error("LLM error: %s", e)
+                    st.error("The mind could not answer right now. Please try again.")
 
 
 # ─────────────────────────────────────────────
@@ -407,7 +523,23 @@ def main():
         return
 
     init_session_state()
-    render_sidebar()
+
+    try:
+        mind = get_mind()
+    except Exception as e:
+        logger.error("Initialization error: %s", e)
+        st.error("The mind could not be started. Check the server logs.")
+        return
+
+    if not st.session_state.user:
+        render_login(mind["accounts"])
+        return
+
+    render_sidebar(mind)
+
+    if not is_admin(st.session_state.user):
+        render_chat(mind)
+        return
 
     tab1, tab2, tab3 = st.tabs([
         "💬 Chat",
@@ -416,7 +548,7 @@ def main():
     ])
 
     with tab1:
-        render_chat()
+        render_chat(mind)
     with tab2:
         render_blockchain()
     with tab3:
